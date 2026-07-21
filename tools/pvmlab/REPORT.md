@@ -65,3 +65,72 @@
   MiniGenerator를 이터레이터로 소비하도록 분기 추가 필요.
 - 값 스택의 NULL 표현은 P1대로 파이썬 `None`을 겸용(전용 센티넬 아님). 제너레이터
   send에서 실제 None 주입과 충돌 소지가 있는지 P3에서 점검할 것.
+
+---
+
+## P3 — 제너레이터 (10/12장)
+
+### 구현 요약
+- **새 파일**
+  - `engine/generator.py` — MiniGenerator(보관된 Frame + 상태) + gsend 마커.
+  - `engine/opcodes/generators.py` — RETURN_GENERATOR/YIELD_VALUE의 '설명'만 등록
+    (핸들러는 구조상 pvm 루프 본체에 있음).
+  - `demos/ch10_generators.py`, `demos/ch12_decorators.py`.
+- **엔진 변경 (비재귀 루프의 보상)**
+  - `Frame.generator` 필드 추가(이 프레임이 제너레이터의 것이면 그 MiniGenerator).
+  - 루프 본체에 **RETURN_GENERATOR**(프레임을 실행하지 않고 보관한 객체를 반환),
+    **YIELD_VALUE**(프레임을 소멸이 아니라 보관 — ip·값 스택 보존), 그리고 제너레이터
+    **RETURN**(=COMPLETED/StopIteration) 처리를 추가. 모두 프레임 스택을 다루는
+    '기계 구조'라 CALL/RETURN과 나란히 본체에 둠.
+  - `MiniPVM._resume_generator(gen, sent, on_stop)`: 보관 프레임을 프레임 스택으로
+    되돌리고 sent 값을 그 프레임 값 스택에 push해 이어 실행. next는 None, gsend는 준 값.
+  - `record()`에 `held`(지금 스택에 없는 제너레이터 프레임) 스냅샷 추가 — 상태·보관된
+    ip offset·값 스택 그대로.
+- **뷰어**: '보관된 프레임' 패널 신설(상태 배지 CREATED/SUSPENDED/RUNNING/COMPLETED,
+  보관된 ip 위치·값 스택 표시). 프레임이 스택↔보관 패널을 오가는 것이 P3 하이라이트.
+- **run.py**: `@demo(..., ref=참조함수)` 지원. 데모가 gsend를 쓰면 stock CPython으로
+  그대로 못 도니, 실제 `.send()`를 쓰는 ref 함수로 대조값을 계산.
+
+### 내린 설계 판단과 이유
+- **제너레이터 생성은 RETURN_GENERATOR 지점에서 처리(CALL 지점 특별대우 아님)**:
+  제너레이터 함수 호출도 일반 CALL처럼 프레임을 push하고, 그 프레임의 첫 명령
+  RETURN_GENERATOR가 스스로를 보관된 객체로 바꿔 호출자에게 돌려준다. CPython ceval과
+  동일한 흐름이라, '함수를 호출해도 본문이 0줄 실행된다'는 장면이 공짜로 나온다.
+- **YIELD는 "보관", RETURN은 "소멸"을 프레임 스택 조작으로 그대로 구현**: YIELD_VALUE는
+  프레임을 스택에서 떼되 MiniGenerator 안에 그대로 보관(ip·값 스택 유지), RETURN은
+  버린다. 비재귀 단일 루프이기에 프레임 수명이 우리 손에 남아 이게 가능하다 — P3가
+  비재귀 구조의 '보상'인 이유.
+- **send는 엔진 마커 gsend로 우회**: `gen.send(v)`는 LOAD_ATTR(P4)이 필요. P3 범위를
+  지키려고 엔진이 CALL 지점에서 가로채는 마커 함수 gsend(gen, v)를 도입. 대조는 실제
+  `.send()`를 쓰는 ref로 하여 진짜 CPython과의 동치를 그대로 검증.
+- **⚠ CALL 호출 규약을 정확히 다시 구현(중요 수정)**: 3.12의 CALL은 스택
+  `[콜러블, self_or_NULL, 인자...]` 를 쓴다. 일반 호출은 콜러블 아래 NULL이 깔리고,
+  메서드/데코레이터(`identity(greet)` 등 PUSH_NULL 없는 형태)는 NULL 자리에 진짜 self가
+  있고 그것이 arg0이 된다. P1의 CALL은 후자를 처리하지 못해 데코레이터에서 콜러블을
+  잘못 집었다. "맨 위/그 아래 두 슬롯을 보고, 아래가 NULL이면 일반 호출, 아니면 아래가
+  콜러블이고 위는 arg0" 규칙으로 교정.
+- **⚠ LOAD_GLOBAL이 NULL 슬롯을 함께 밀도록 수정(중요 수정)**: 3.12는 곧 호출될
+  전역을 읽을 때 LOAD_GLOBAL 인자 하위 비트를 켜서 콜러블 아래 NULL을 함께 민다
+  (argrepr "NULL + 이름"). P1은 이를 무시해 값만 밀었고, 위의 새 CALL 규약과 만나
+  슬롯 수가 어긋났다. `ins.arg & 1`일 때 NULL을 함께 밀도록 교정 — 이제 모든 호출이
+  균일하게 `콜러블+NULL슬롯+인자` 형태가 된다.
+- **NOP 추가**: `while True` 등에서 등장(no-op, 기록 생략).
+
+### 실측에서 확정한 opcode (예상과 다른 점)
+- 제너레이터 첫 명령은 `RETURN_GENERATOR; POP_TOP; RESUME`. 재개 시 보낸 값을 값
+  스택에 push하면 첫 POP_TOP(첫 next의 None) 또는 STORE_FAST(=`x = yield`)가 그 값을 받음.
+- `SEND`/`END_SEND`는 이 데모들엔 등장하지 않음(`yield from` 전용) → 미구현. 필요 시
+  P3+에서 추가. 예상 목록엔 있었으나 실측 우선.
+- 데코레이터 사용 지점은 `MAKE_FUNCTION → CALL → STORE`로 컴파일(스텝으로 확인됨).
+
+### 검증 결과 (전부 통과)
+- 데모 15개(P1 5 + P2 6 + P3 4) 전부 진짜 CPython과 assert 대조 OK, `python run.py` 무에러.
+- 검증2: countdown 트레이스에 SUSPENDED 보관 프레임 스냅샷 존재(ip offset·locals·값 스택 보존).
+- 검증3: countdown 프레임이 스택에서 사라졌다(보관) 다시 나타나기를 4회 반복.
+- 검증4: ch12 데코레이터 데모 스텝에 MAKE_FUNCTION → CALL → STORE 순서 등장.
+
+### 다음 페이즈(P4)에 넘긴 것
+- CALL 규약이 이제 self/메서드 슬롯을 처리하므로, P4의 `d.bark()`(LOAD_ATTR 메서드
+  변형이 method+self를 스택에 올림)와 자연히 맞물릴 것. LOAD_ATTR에서 method 형태를
+  push하면 CALL이 그대로 소비한다.
+- 값 스택 NULL=None 겸용은 P3까지 문제 없었음(gsend는 실제 None을 인자로 밀지 않음).

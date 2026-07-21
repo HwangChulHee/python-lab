@@ -48,3 +48,4 @@ OPCODE_DOCS["RETURN_CONST"] = (
 from . import core        # noqa: E402,F401  P1: 스택 머신 기본
 from . import iteration   # noqa: E402,F401  P2: for 루프·컴프리헨션·첨자·언패킹 (03장)
 from . import closures    # noqa: E402,F401  P2: 셀·클로저·MAKE_FUNCTION (07장)
+from . import generators  # noqa: E402,F401  P3: 제너레이터 opcode 설명 (10장)

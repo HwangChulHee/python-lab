@@ -13,6 +13,8 @@ engine — pvmlab 실행 엔진 (라이브러리)
 
 from .frame import Frame, fmt
 from .pvm import MiniPVM
+from .generator import MiniGenerator, gsend
 from .opcodes import opcode, OPCODE_HANDLERS, OPCODE_DOCS
 
-__all__ = ["Frame", "fmt", "MiniPVM", "opcode", "OPCODE_HANDLERS", "OPCODE_DOCS"]
+__all__ = ["Frame", "fmt", "MiniPVM", "MiniGenerator", "gsend",
+           "opcode", "OPCODE_HANDLERS", "OPCODE_DOCS"]

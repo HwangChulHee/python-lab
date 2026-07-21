@@ -66,11 +66,17 @@ def run_demo(spec):
     for cargs in call_list:                    # calls면 같은 트레이스에 이어 기록
         result = pvm.call(func, list(cargs))
 
-    # 진짜 CPython 대조: 오염 없는 새 함수 객체로 같은 호출 시퀀스 재현.
-    ref = fresh_copy(func, pristine)
-    expected = None
-    for cargs in call_list:
-        expected = ref(*cargs)
+    # 진짜 CPython 대조:
+    #  · ref 참조 함수가 있으면 그걸 실제 파이썬으로 돌려 기대값을 얻는다
+    #    (gsend처럼 엔진 전용 도구를 쓰는 데모용).
+    #  · 없으면 오염 없는 새 함수 객체로 같은 호출 시퀀스를 재현한다.
+    if spec.get("ref") is not None:
+        expected = spec["ref"]()
+    else:
+        clean = fresh_copy(func, pristine)
+        expected = None
+        for cargs in call_list:
+            expected = clean(*cargs)
 
     trace = {"title": title, "steps": pvm.steps, "listings": pvm.listings,
              "sources": pvm.sources, "code_attrs": pvm.code_attrs, "names": pvm.names}

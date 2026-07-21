@@ -22,6 +22,13 @@ def _resume(pvm, frame, ins):
     return None                                 # 기록 생략 (노이즈)
 
 
+@opcode("NOP",
+        "아무 일도 하지 않는 명령(No OPeration). 컴파일러가 자리맞춤·소스 줄 대응 "
+        "등을 위해 남겨 두는 빈 슬롯. 스택효과 0")
+def _nop(pvm, frame, ins):
+    return None                                 # 기록 생략
+
+
 # ================================================================ 값 올리기 (push)
 @opcode("LOAD_CONST",
         "코드 객체의 상수 목록 co_consts에서 값을 꺼내 스택에 push. 상수는 컴파일 "
@@ -42,16 +49,20 @@ def _load_fast(pvm, frame, ins):
 @opcode("LOAD_GLOBAL",
         "함수 객체에 붙은 __globals__ 딕셔너리에서 이름을 찾아 push. 없으면 "
         "builtins까지 뒤진다. 지역과 달리 문자열 키 조회라 상대적으로 느리다. "
-        "스택효과 +1 (3.11+에선 NULL도 함께 밀어 실제 +2일 수 있음)")
+        "3.12에선 인자 하위 비트가 켜져 있으면(바로 뒤에서 호출할 때) 콜러블 아래에 "
+        "NULL 자리표시자도 함께 민다 — 그래서 argrepr가 'NULL + 이름'. 스택효과 +1 또는 +2")
 def _load_global(pvm, frame, ins):
     name = ins.argval
     if name in frame.globals:
         value = frame.globals[name]
     else:
         value = getattr(builtins, name)         # print, len 같은 내장
+    if ins.arg & 1:                             # 3.12: 하위 비트 = 호출 규약용 NULL 동반
+        frame.value_stack.append(None)          # 콜러블 아래에 깔리는 NULL 슬롯
     frame.value_stack.append(value)
     where = "__globals__" if name in frame.globals else "builtins"
-    return f"{where}에서 '{name}'을 찾아 push (함수 이름은 co_names 경유로 조회)"
+    tail = " (+ 호출용 NULL 자리표시자)" if ins.arg & 1 else ""
+    return f"{where}에서 '{name}'을 찾아 push{tail}"
 
 
 @opcode("PUSH_NULL",

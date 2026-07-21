@@ -50,6 +50,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .fr.act .fr-name { color:var(--acc); }
   .fr-row { font:12.5px ui-monospace,Consolas,monospace; color:var(--sub); }
   .fr-row.cells { color:#6a4bb0; }
+  .panel.held { border-color:#c9b8e6; background:#f7f3fc; }
+  .panel.held h2 { color:#6a4bb0; }
+  .heldfr { border-style:dashed; }
+  .heldfr.st-SUSPENDED { border-color:#c9a227; background:#fdf8ec; }
+  .heldfr.st-CREATED { border-color:#7ea3d6; background:#eef4fb; }
+  .heldfr.st-COMPLETED { opacity:.5; }
+  .stbadge { font-size:10.5px; font-weight:600; border-radius:5px; padding:0 6px;
+             margin-left:4px; }
+  .stbadge.st-SUSPENDED { color:#8a6d18; background:#faf0da; }
+  .stbadge.st-CREATED { color:#2f6fce; background:#e9f1fc; }
+  .stbadge.st-RUNNING { color:#2f8f4e; background:#e6f4ec; }
+  .stbadge.st-COMPLETED { color:#8b897f; background:#eeece5; }
   .stack-cells { display:flex; gap:6px; flex-wrap:wrap; margin-top:3px; }
   .cell { padding:1px 9px; border-radius:6px; background:var(--warnbg);
           color:var(--warn); border:1px solid #ecd9ae;
@@ -97,6 +109,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
   <div>
     <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중)</h2><div id="stk"></div></div>
+    <div class="panel held" id="heldpanel" style="display:none"><h2>보관된 프레임 · 제너레이터 (소멸 아님, ip·값 스택 보존)</h2><div id="held"></div></div>
     <div class="desc" id="desc"></div>
     <div class="opdoc" id="opdoc">바이트코드 줄을 클릭하면 그 명령의 설명이 여기 고정 표시됩니다.</div>
     <details class="ins" open><summary>코드 객체 속성 <span class="badge">불변 · 컴파일 시점 확정</span></summary><div id="codeattrs"></div></details>
@@ -170,6 +183,22 @@ function render() {
       ((f.cells && Object.keys(f.cells).length) ? `
         <div class="fr-row cells">셀 변수: ${Object.entries(f.cells).map(([k,v]) => esc(k)+" ▸ "+esc(v)).join(", ")}</div>` : "") + `
         <div class="fr-row">값 스택:</div>
+        <div class="stack-cells">${f.stack.length
+          ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
+          : '<span class="cell empty">비어 있음</span>'}</div>
+      </div>`).join("");
+
+  // -- 보관된 프레임 (제너레이터) --
+  const held = s.held ?? [];
+  $("heldpanel").style.display = held.length ? "" : "none";
+  $("held").innerHTML = held.map(f => `
+      <div class="fr heldfr st-${esc(f.state)}">
+        <div class="fr-name">${esc(f.label)} <span class="stbadge st-${esc(f.state)}">${esc(f.state)}</span></div>
+        <div class="fr-row">보관된 위치: offset ${f.ip_off ?? "—"}${f.line ? " (소스 " + f.line + "줄)" : ""}</div>
+        <div class="fr-row">지역 변수: ${Object.entries(f.locals).map(([k,v]) => esc(k)+" = "+esc(v)).join(", ") || "—"}</div>` +
+      ((f.cells && Object.keys(f.cells).length) ? `
+        <div class="fr-row cells">셀 변수: ${Object.entries(f.cells).map(([k,v]) => esc(k)+" ▸ "+esc(v)).join(", ")}</div>` : "") + `
+        <div class="fr-row">보관된 값 스택:</div>
         <div class="stack-cells">${f.stack.length
           ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
           : '<span class="cell empty">비어 있음</span>'}</div>

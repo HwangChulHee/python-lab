@@ -21,6 +21,7 @@ for 루프·리스트 컴프리헨션·첨자 접근·언패킹이 여기서 처
 """
 
 from . import opcode
+from ..generator import MiniGenerator
 
 
 # ================================================================ 이터레이터
@@ -29,6 +30,9 @@ from . import opcode
         "for 루프의 준비 단계. 스택효과 0")
 def _get_iter(pvm, frame, ins):
     obj = frame.value_stack.pop()
+    if isinstance(obj, MiniGenerator):         # 제너레이터는 자기 자신이 이터레이터
+        frame.value_stack.append(obj)
+        return f"{obj!r}은 이미 이터레이터 — 그대로 push (FOR_ITER가 resume으로 소비)"
     frame.value_stack.append(iter(obj))
     return f"{obj!r}의 이터레이터를 만들어 push (iter 호출)"
 
@@ -39,10 +43,21 @@ def _get_iter(pvm, frame, ins):
         "여기서 pop하지 않고, 점프한 자리의 END_FOR가 정리한다. 스택효과 +1 (또는 점프)")
 def _for_iter(pvm, frame, ins):
     it = frame.value_stack[-1]                 # 이터레이터는 pop하지 않고 들여다본다
+    target = frame.offset_to_index[ins.argval]
+
+    # 대상이 MiniGenerator면 next()를 인라인 호출할 수 없다(재개는 프레임 스택을 태워야
+    # 한다). 소진 시 이 for가 빠져나갈 자리를 on_stop으로 알려주고 재개를 맡긴다.
+    if isinstance(it, MiniGenerator):
+        if it.state == "COMPLETED":
+            frame.ip = target
+            return "제너레이터 이미 소진 → 루프 밖으로 점프"
+        pvm._resume_generator(it, None, ("for", frame, target))
+        return None                            # resume이 프레임을 push하고 자체 기록
+
     try:
         value = next(it)
     except StopIteration:
-        frame.ip = frame.offset_to_index[ins.argval]
+        frame.ip = target
         return "이터레이터 소진 → 루프 밖으로 점프 (이터레이터는 END_FOR가 정리)"
     frame.value_stack.append(value)
     return f"다음 값 {value!r}을 push (이터레이터는 스택에 그대로 남는다)"

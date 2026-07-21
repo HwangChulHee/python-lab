@@ -48,6 +48,7 @@ class Frame:
         self.offset_to_index = {ins.offset: i for i, ins in enumerate(self.instructions)}
 
         self.ip = 0                            # 명령 포인터 (instructions 리스트의 인덱스)
+        self.generator = None                  # 이 프레임이 제너레이터의 것이면 그 MiniGenerator (P3)
 
         # 코드 객체를 유일하게 식별하는 키. co_qualname을 쓰면 같은 코드 객체를 공유하는
         # 함수(add1/add5)는 같은 키로 묶이고(정확), 서로 다른 코드 객체는 다른 키가 된다.

@@ -22,6 +22,7 @@ import inspect
 import textwrap
 
 from .frame import Frame, fmt, fmt_cell, reset_obj_labels
+from .generator import MiniGenerator, gsend
 from .inspector import code_attr_snapshot, func_attr_values, build_func_attrs
 from .opcodes import OPCODE_HANDLERS, OPCODE_DOCS
 
@@ -36,6 +37,7 @@ class MiniPVM:
         self.code_attrs = {}                   # {코드key: 코드 객체 속성}     (뷰어용, 불변)
         self.names = {}                        # {코드key: 사람이 읽는 함수 이름} (뷰어 표시용)
         self.steps = []                        # 스텝 스냅샷 목록              (뷰어용)
+        self.generators = []                   # 만들어진 MiniGenerator 전부 (보관 프레임 표시용)
         self._last_func_snap = {}              # {id(func): {속성:값}} — diff 계산용
         reset_obj_labels()                     # <objN> 라벨을 트레이스마다 초기화
 
@@ -68,9 +70,30 @@ class MiniPVM:
             if op == "CALL":
                 n = ins.arg
                 args = [frame.value_stack.pop() for _ in range(n)][::-1]
-                target = frame.value_stack.pop()
-                if frame.value_stack and frame.value_stack[-1] is None:
-                    frame.value_stack.pop()    # PUSH_NULL이 깔아둔 자리표시자 제거
+                # 3.12 호출 규약: 스택은 [콜러블, self_or_NULL, 인자...] 모양이다.
+                #  · 일반 호출 f(x): 콜러블 아래에 NULL 자리표시자가 깔려 있다.
+                #  · 메서드/데코레이터 g@f: NULL 대신 진짜 self/피장식 함수가 있고, 그것이 arg0이 된다.
+                top1 = frame.value_stack.pop()             # 맨 위: 콜러블 또는 self/arg0
+                below = frame.value_stack.pop()            # 그 아래: NULL 또는 콜러블
+                if below is None:                          # 일반 호출
+                    target = top1
+                else:                                      # 메서드/데코레이터 — self가 첫 인자
+                    target = below
+                    args = [top1] + args
+
+                # 제너레이터 구동 가로채기: next(gen) / gsend(gen, value).
+                # gsend는 파이썬 함수라 __code__가 있으니 아래 일반 분기보다 먼저 가로챈다.
+                if args and isinstance(args[0], MiniGenerator) and (target is next or target is gsend):
+                    gen = args[0]
+                    sent = args[1] if target is gsend else None
+                    drv = "gsend" if target is gsend else "next"
+                    if gen.state == "COMPLETED":
+                        raise StopIteration(f"{gen.label}은 이미 소진된 제너레이터")
+                    self.record(f"CALL {drv}({gen.label}) — 보관된 제너레이터를 재개하라는 요청",
+                                executed, ins)
+                    self._resume_generator(gen, sent, ("next", frame))
+                    continue
+
                 self.record(
                     f"CALL — 스택에서 함수 객체와 인자 {args} pop. 그 함수 객체의 "
                     f"__code__로 새 프레임을 만든다", executed, ins)
@@ -93,10 +116,55 @@ class MiniPVM:
                         f"않고 C에 위임)", None, None)
                     continue
 
+            # -- RETURN_GENERATOR: 프레임을 '보관하는' 기계 구조 (제너레이터 생성) --
+            # 제너레이터 함수의 첫 명령. 지금 프레임을 실행하지 않고, 이 프레임을 보관한
+            # 제너레이터 객체를 만들어 호출자에게 돌려준다. (본문은 0줄 실행)
+            if op == "RETURN_GENERATOR":
+                gen = MiniGenerator(frame, f"{frame.func_name}#{len(self.generators) + 1}")
+                frame.generator = gen
+                self.generators.append(gen)
+                self.frame_stack.pop()                     # 프레임 스택에서 떼어 보관(CREATED)
+                self.record(
+                    f"RETURN_GENERATOR — {gen.label} 제너레이터 객체 생성. 본문을 실행하지 "
+                    f"않고 프레임을 보관(CREATED). 호출한 함수를 '호출'해도 본문은 0줄 실행", None, ins)
+                if self.frame_stack:
+                    self.frame_stack[-1].value_stack.append(gen)
+                    self.record(f"제너레이터 객체 {gen.label}이 호출자 스택에 push", None, None)
+                continue
+
+            # -- YIELD_VALUE: 프레임을 '보관하되 소멸시키지 않는' 기계 구조 --
+            if op == "YIELD_VALUE":
+                value = frame.value_stack.pop()
+                gen = frame.generator
+                gen.state = "SUSPENDED"
+                self.frame_stack.pop()                     # 프레임을 스택에서 떼어 보관 (ip·값 스택 보존)
+                on_stop = gen.on_stop
+                self.record(
+                    f"YIELD_VALUE — 값 {value!r}을 내보내고 {gen.label} 프레임을 소멸시키지 "
+                    f"않은 채 보관(SUSPENDED). RETURN과의 차이가 이것이다", None, ins)
+                if self.frame_stack:                       # 재개를 요청한 프레임에게 값 전달
+                    self.frame_stack[-1].value_stack.append(value)
+                    self.record(f"yield된 값 {value!r}이 재개 요청 프레임의 값 스택에 올라옴", None, None)
+                continue
+
             # -- RETURN: 프레임을 '부수는' 기계 구조 --
             if op in ("RETURN_VALUE", "RETURN_CONST"):
                 value = frame.value_stack.pop() if op == "RETURN_VALUE" else ins.argval
                 self.frame_stack.pop()                     # 프레임 소멸
+
+                if frame.generator is not None:            # 제너레이터 본문 종료 = StopIteration
+                    gen = frame.generator
+                    gen.state = "COMPLETED"
+                    self.record(f"{op} — 제너레이터 {gen.label} 본문 종료 → COMPLETED "
+                                f"(StopIteration 의미)", None, ins)
+                    info, gen.on_stop = gen.on_stop, None
+                    if info and info[0] == "for":          # for 소비 중이었으면 루프 밖으로
+                        _, for_frame, target = info
+                        for_frame.ip = target
+                        self.record("소진 감지 → for 루프를 빠져나감 (남은 제너레이터는 "
+                                    "END_FOR가 정리)", None, None)
+                    continue
+
                 self.record(f"{op} — {frame.func_name} 프레임 통째로 소멸, {value!r} 반환",
                             None, ins)
                 if self.frame_stack:                       # 호출자가 있으면
@@ -122,6 +190,21 @@ class MiniPVM:
             if note is not None:                           # None = 기록 생략 (RESUME 등)
                 self.record(f"{op} — {note}", executed, ins)
         return result
+
+    # ---------------------------------------------------------- 제너레이터 재개
+    def _resume_generator(self, gen, sent, on_stop):
+        """보관된 제너레이터 프레임을 프레임 스택으로 되돌리고 실행을 이어 간다.
+
+        재개의 정체가 여기 다 들어 있다: 보관해 둔 프레임(ip·값 스택 그대로)을 다시
+        스택 맨 위에 올리고, 보내진 값을 그 프레임의 값 스택에 push한다. 다음 루프
+        반복부터 그 프레임이 멈췄던 자리에서 이어 실행된다. next는 None을, gsend는
+        준 값을 보낸다 — yield 표현식의 결과가 바로 그 값이다."""
+        gen.state = "RUNNING"
+        gen.on_stop = on_stop
+        gen.frame.value_stack.append(sent)             # 보낸 값을 보관 프레임의 스택에 push
+        self.frame_stack.append(gen.frame)             # 보관 프레임을 스택으로 복귀
+        self.record(f"resume — {gen.label} 보관 프레임을 프레임 스택으로 되돌림. 보낸 값 "
+                    f"{sent!r}을 값 스택에 push하고 멈췄던 자리부터 이어 실행", None, None)
 
     # ---------------------------------------------------------- 코드 객체 캡처 (1회)
     def _capture_code(self, frame):
@@ -156,16 +239,37 @@ class MiniPVM:
                 "stack": [fmt(v) for v in fr.value_stack],
                 "active": i == len(self.frame_stack) - 1,
             })
+        # 보관된 제너레이터 프레임(지금 스택에 없는 것) — '보관된 프레임' 패널용.
+        # 프레임이 스택 ↔ 보관 패널을 오가는 것이 P3의 하이라이트 장면이다.
+        on_stack = set(id(f) for f in self.frame_stack)
+        held = [self._held_snapshot(g) for g in self.generators
+                if id(g.frame) not in on_stack]
+
         top = self.frame_stack[-1] if self.frame_stack else None
         self.steps.append({
             "action": action,
             "frames": frames,                  # 아래(먼저 쌓인 것) → 위 순서
+            "held": held,                      # 보관된 제너레이터 프레임들
             "exec": executed_index,            # 하이라이트할 명령 인덱스 (None 가능)
             "key": top.listing_key if top else None,
             "line": (ins.positions.lineno if ins and ins.positions else None),
             "opname": ins.opname if ins else None,
             "func_attrs": self._func_attrs_with_diff(top.func) if top else [],
         })
+
+    def _held_snapshot(self, gen):
+        """보관된 제너레이터 프레임 하나를 스냅샷(상태·보관된 ip·값 스택 그대로)."""
+        fr = gen.frame
+        cur = fr.instructions[fr.ip] if fr.ip < len(fr.instructions) else None
+        return {
+            "label": gen.label, "name": fr.func_name, "key": fr.listing_key,
+            "state": gen.state,
+            "locals": {k: fmt(v) for k, v in fr.local_vars.items()},
+            "cells": {k: fmt_cell(c) for k, c in fr.cells.items()},
+            "stack": [fmt(v) for v in fr.value_stack],
+            "ip_off": cur.offset if cur else None,
+            "line": (cur.positions.lineno if cur and cur.positions else None),
+        }
 
     def _func_attrs_with_diff(self, func):
         """맨 위 프레임 함수 객체의 속성 스냅샷 + 직전 스냅샷과의 diff(changed 키)."""
