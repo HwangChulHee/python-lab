@@ -73,7 +73,7 @@ def run_demo(spec):
         expected = ref(*cargs)
 
     trace = {"title": title, "steps": pvm.steps, "listings": pvm.listings,
-             "sources": pvm.sources, "code_attrs": pvm.code_attrs}
+             "sources": pvm.sources, "code_attrs": pvm.code_attrs, "names": pvm.names}
     return trace, result, expected
 
 

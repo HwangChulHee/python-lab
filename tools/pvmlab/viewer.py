@@ -49,6 +49,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .fr-name { font:600 14px ui-monospace,Consolas,monospace; margin-bottom:5px; }
   .fr.act .fr-name { color:var(--acc); }
   .fr-row { font:12.5px ui-monospace,Consolas,monospace; color:var(--sub); }
+  .fr-row.cells { color:#6a4bb0; }
   .stack-cells { display:flex; gap:6px; flex-wrap:wrap; margin-top:3px; }
   .cell { padding:1px 9px; border-radius:6px; background:var(--warnbg);
           color:var(--warn); border:1px solid #ecd9ae;
@@ -138,10 +139,11 @@ function render() {
   $("slider").max = t.steps.length - 1;
   $("slider").value = i;
   const key = s.key ?? t.steps[Math.max(0, i-1)].key;
+  const dispName = (t.names && t.names[key]) ? t.names[key] : key;
 
   // -- 소스 --
   const src = t.sources[key] ?? {first: 1, lines: []};
-  $("srcname").textContent = key.replace(".__code__", "") + " 소스 코드";
+  $("srcname").textContent = dispName + " 소스 코드";
   $("src").innerHTML = src.lines.map((ln, n) => {
     const lineno = src.first + n;
     return `<div class="src-row ${s.key === key && lineno === s.line ? "on" : ""}">` +
@@ -149,7 +151,7 @@ function render() {
   }).join("");
 
   // -- 바이트코드 --
-  $("cname").textContent = key + " 의 바이트코드 (진짜 CPython 출력)";
+  $("cname").textContent = dispName + " 의 바이트코드 (진짜 CPython 출력)";
   $("bc").innerHTML = (t.listings[key] ?? []).map((r, n) =>
     `<div class="bc-row ${s.key === key && n === s.exec ? "on" : ""}" data-n="${n}">` +
     `<span class="off">${r.off}</span><span>${esc(r.op)} ${esc(r.arg)}</span></div>`).join("");
@@ -164,7 +166,9 @@ function render() {
     : s.frames.slice().reverse().map(f => `
       <div class="fr ${f.active ? "act" : "wait"}">
         <div class="fr-name">${esc(f.name)} 프레임 ${f.active ? "· 실행 중" : "· 대기(값 스택 유지)"}</div>
-        <div class="fr-row">지역 변수: ${Object.entries(f.locals).map(([k,v]) => esc(k)+" = "+esc(v)).join(", ") || "—"}</div>
+        <div class="fr-row">지역 변수: ${Object.entries(f.locals).map(([k,v]) => esc(k)+" = "+esc(v)).join(", ") || "—"}</div>` +
+      ((f.cells && Object.keys(f.cells).length) ? `
+        <div class="fr-row cells">셀 변수: ${Object.entries(f.cells).map(([k,v]) => esc(k)+" ▸ "+esc(v)).join(", ")}</div>` : "") + `
         <div class="fr-row">값 스택:</div>
         <div class="stack-cells">${f.stack.length
           ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")

@@ -21,7 +21,7 @@ CPython ceval의 뼈대만 재현한다. 핵심 설계는 '프레임 스택 리�
 import inspect
 import textwrap
 
-from .frame import Frame, fmt
+from .frame import Frame, fmt, fmt_cell, reset_obj_labels
 from .inspector import code_attr_snapshot, func_attr_values, build_func_attrs
 from .opcodes import OPCODE_HANDLERS, OPCODE_DOCS
 
@@ -34,8 +34,10 @@ class MiniPVM:
         self.listings = {}                     # {코드key: 바이트코드 목록}    (뷰어용)
         self.sources = {}                      # {코드key: 소스 줄들}          (뷰어용)
         self.code_attrs = {}                   # {코드key: 코드 객체 속성}     (뷰어용, 불변)
+        self.names = {}                        # {코드key: 사람이 읽는 함수 이름} (뷰어 표시용)
         self.steps = []                        # 스텝 스냅샷 목록              (뷰어용)
         self._last_func_snap = {}              # {id(func): {속성:값}} — diff 계산용
+        reset_obj_labels()                     # <objN> 라벨을 트레이스마다 초기화
 
     # ---------------------------------------------------------- 진입점: CALL의 최초 형태
     def call(self, func, args):
@@ -127,6 +129,7 @@ class MiniPVM:
         key = frame.listing_key
         if key in self.listings:
             return
+        self.names[key] = frame.func_name      # 키는 co_qualname, 표시는 읽기 좋은 이름
         self.listings[key] = [
             {"off": i.offset, "op": i.opname, "arg": i.argrepr,
              "line": i.positions.lineno if i.positions else None,
@@ -149,6 +152,7 @@ class MiniPVM:
                 "name": fr.func_name,
                 "key": fr.listing_key,
                 "locals": {k: fmt(v) for k, v in fr.local_vars.items()},
+                "cells": {k: fmt_cell(c) for k, c in fr.cells.items()},
                 "stack": [fmt(v) for v in fr.value_stack],
                 "active": i == len(self.frame_stack) - 1,
             })

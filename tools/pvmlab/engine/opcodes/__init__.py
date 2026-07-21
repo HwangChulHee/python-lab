@@ -43,5 +43,8 @@ OPCODE_DOCS["RETURN_CONST"] = (
     "RETURN_VALUE의 최적화판(3.12+): 상수를 스택에 올렸다 도로 내리는 대신 "
     "co_consts의 값을 바로 반환한다. 프레임 소멸은 동일.")
 
-# core.py를 import해 @opcode 등록을 실제로 일으킨다. (레지스트리 정의 뒤에 와야 함)
-from . import core  # noqa: E402,F401
+# 각 opcode 모듈을 import해 @opcode 등록을 실제로 일으킨다. (레지스트리 정의 뒤에 와야 함)
+# 새 장을 열 때 여기에 한 줄씩 추가한다.
+from . import core        # noqa: E402,F401  P1: 스택 머신 기본
+from . import iteration   # noqa: E402,F401  P2: for 루프·컴프리헨션·첨자·언패킹 (03장)
+from . import closures    # noqa: E402,F401  P2: 셀·클로저·MAKE_FUNCTION (07장)

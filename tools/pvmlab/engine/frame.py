@@ -1,27 +1,29 @@
 """
-frame.py — Frame 클래스
+frame.py — Frame 클래스 + 값 표시 헬퍼
 
 Frame = 함수 호출 1번에 대응하는 작업 공간. CPython에서도 호출마다 프레임이
-하나씩 만들어진다. 프레임이 담는 것은 딱 세 가지다:
+하나씩 만들어진다. 프레임이 담는 것:
 
   1) 지역 변수 (local_vars)   — LOAD_FAST/STORE_FAST가 읽고 쓰는 곳
-  2) 값 스택   (value_stack)  — 계산 중간값이 잠깐 올라갔다 내려오는 곳
-  3) 명령 포인터 (ip)          — 지금 코드 객체의 몇 번째 명령을 실행 중인가
+  2) 셀 변수   (cells)        — LOAD_DEREF/STORE_DEREF가 읽고 쓰는 곳 (클로저 P2)
+  3) 값 스택   (value_stack)  — 계산 중간값이 잠깐 올라갔다 내려오는 곳
+  4) 명령 포인터 (ip)          — 지금 코드 객체의 몇 번째 명령을 실행 중인가
 
-코드 객체(func.__code__)는 '불변의 설계도'이고, Frame은 그 설계도를 따라
-실제로 값이 흐르는 '가변의 현장'이다. 같은 코드 객체로 여러 프레임을 만들 수
-있다(재귀가 그 예). 그래서 지역/스택/포인터는 코드 객체가 아니라 Frame에 있다.
+코드 객체(func.__code__)는 '불변의 설계도'이고, Frame은 그 설계도를 따라 실제로
+값이 흐르는 '가변의 현장'이다. 같은 코드 객체로 여러 프레임을 만들 수 있다(재귀,
+그리고 make_adder가 만든 add1/add5처럼 코드 객체를 공유하는 함수들).
 """
 
 import dis
+import types
 
 
 class Frame:
-    """호출 1번 = Frame 1개. 지역 변수 + 값 스택 + 명령 포인터를 담는 작업 공간."""
+    """호출 1번 = Frame 1개. 지역 변수 + 셀 변수 + 값 스택 + 명령 포인터."""
 
     def __init__(self, func, args):
         code = func.__code__
-        self.func = func                       # 함수 객체 (인스펙터가 __defaults__ 등을 스냅샷)
+        self.func = func                       # 함수 객체 (인스펙터가 __defaults__/__closure__ 스냅샷)
         self.code = code                       # 코드 객체 (읽기 전용 참조 — 불변)
         self.func_name = func.__name__
         self.globals = func.__globals__        # LOAD_GLOBAL이 뒤질 곳 — 함수 객체에 붙어 있다
@@ -38,6 +40,7 @@ class Frame:
         for idx in range(len(args), len(arg_names)):
             self.local_vars[arg_names[idx]] = defaults[idx - first_default]
 
+        self.cells = {}                        # {이름: types.CellType} — 셀 변수 (클로저)
         self.value_stack = []                  # 계산용 스택 (리스트 끝이 맨 위)
 
         # 바이트코드를 미리 풀어 리스트로. offset→인덱스 표도 만들어 둔다(점프용).
@@ -45,14 +48,56 @@ class Frame:
         self.offset_to_index = {ins.offset: i for i, ins in enumerate(self.instructions)}
 
         self.ip = 0                            # 명령 포인터 (instructions 리스트의 인덱스)
-        self.listing_key = f"{func.__name__}.__code__"
+
+        # 코드 객체를 유일하게 식별하는 키. co_qualname을 쓰면 같은 코드 객체를 공유하는
+        # 함수(add1/add5)는 같은 키로 묶이고(정확), 서로 다른 코드 객체는 다른 키가 된다.
+        self.listing_key = code.co_qualname
+
+
+# ================================================================ 값 표시 헬퍼
+#
+# 가변 컨테이너(list/dict/set)에는 짧은 객체 라벨 <objN>을 붙인다. 같은 객체가
+# 두 이름으로 실리면 같은 라벨이 붙어 '별칭(같은 객체)'임이 눈에 보인다 (데모 ch06).
+# 라벨은 트레이스마다 초기화한다(reset_obj_labels).
+
+_OBJ_LABELS = {}
+
+
+def reset_obj_labels():
+    _OBJ_LABELS.clear()
+
+
+def _obj_label(v):
+    key = id(v)
+    if key not in _OBJ_LABELS:
+        _OBJ_LABELS[key] = f"obj{len(_OBJ_LABELS) + 1}"
+    return _OBJ_LABELS[key]
+
+
+def _short_repr(v):
+    r = repr(v)
+    return r if len(r) <= 34 else r[:31] + "..."
 
 
 def fmt(v):
     """값 스택/지역 변수의 값을 짧은 문자열로. (뷰어 표시용 공통 규칙)"""
+    if isinstance(v, types.CellType):
+        return f"셀({fmt_cell(v)})"
+    if isinstance(v, (list, dict, set)):
+        return f"{_short_repr(v)} <{_obj_label(v)}>"   # 가변 객체 → 객체 라벨 부착
     if callable(v) and hasattr(v, "__name__"):
         return f"{v.__name__} 함수객체"         # 함수 객체는 이름만
     if v is None:
         return "NULL"                          # PUSH_NULL이 깔아둔 자리표시자
-    r = repr(v)
-    return r if len(r) <= 40 else r[:37] + "..."
+    return _short_repr(v)
+
+
+def fmt_cell(cell):
+    """셀 객체의 내용을 짧은 문자열로. 빈 셀(아직 값이 없는 셀)은 '빈 셀'."""
+    try:
+        contents = cell.cell_contents
+    except ValueError:                         # 아직 값이 안 채워진 셀
+        return "빈 셀"
+    if isinstance(contents, (list, dict, set)):
+        return f"{_short_repr(contents)} <{_obj_label(contents)}>"
+    return _short_repr(contents)

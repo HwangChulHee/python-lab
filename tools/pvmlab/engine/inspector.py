@@ -92,10 +92,17 @@ FUNC_ATTR_DOCS = {
 }
 
 
+def _cell_contents_repr(cell):
+    try:
+        return repr(cell.cell_contents)
+    except ValueError:                         # 아직 값이 안 채워진 셀
+        return "빈 셀"
+
+
 def _closure_repr(closure):
     if closure is None:
         return "None"
-    return "(" + ", ".join(repr(c.cell_contents) for c in closure) + ")"
+    return "(" + ", ".join(_cell_contents_repr(c) for c in closure) + ")"
 
 
 def func_attr_values(func):
