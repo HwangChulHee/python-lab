@@ -26,20 +26,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--txt); padding:26px 20px 60px;
          font:15px/1.6 system-ui,'Apple SD Gothic Neo','Malgun Gothic',sans-serif; }
-  .wrap { max-width:1120px; margin:0 auto; }
+  .wrap { max-width:1200px; margin:0 auto; }
   h1 { font-size:19px; font-weight:600; margin-bottom:4px; }
   .sub { font-size:14px; color:var(--sub); margin-bottom:16px; }
   select { font:inherit; padding:6px 10px; border:1px solid var(--line);
            border-radius:8px; background:var(--card); margin-bottom:16px; }
-  .cols { display:grid; grid-template-columns:1.02fr 1fr; gap:14px; align-items:start; }
-  .colL { position:sticky; top:14px; }         /* 코드 열은 위에 고정 — 스크롤해도 항상 보임 */
+  /* 우측 열은 고정 폭(440px) — 코드가 길든 넓든 절대 쪼그라들지 않는다.
+     좌측 코드 열은 minmax(0,1fr)이라 남는 폭만 차지하고, 줄이 넓으면 좌우로 스크롤된다. */
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 440px; gap:14px; align-items:start; }
+  .colL { position:sticky; top:14px; min-width:0; }   /* 코드 열: 위에 고정 + 폭 줄어들 수 있게 */
+  .colR { min-width:0; }
   .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
-           padding:13px; margin-bottom:14px; }
+           padding:13px; margin-bottom:14px; min-width:0; }
   .panel h2 { font-size:12px; font-weight:500; color:var(--mut); margin-bottom:9px; }
-  /* 소스·바이트코드가 길어도 열 자체는 안 늘어나도록 각 패널 내부를 스크롤한다.
-     그래야 프레임 스택·코드 객체 속성이 옆에서 밀려나지 않는다. */
+  /* 소스·바이트코드: 세로로 길면 안에서 세로 스크롤, 줄이 넓으면 가로 스크롤.
+     열 자체는 안 늘어나므로 우측 패널이 밀려나지 않는다. */
   #src { position:relative; max-height:30vh; overflow:auto; }
-  #bc  { position:relative; max-height:44vh; overflow:auto; }
+  #bc  { position:relative; max-height:46vh; overflow:auto; }
   .src-row, .bc-row { display:flex; gap:12px; padding:2.5px 9px; border-radius:6px;
             font:13px/1.65 ui-monospace,Consolas,monospace; color:var(--sub);
             white-space:pre; }
@@ -113,7 +116,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .attr-name { font:600 12.5px ui-monospace,Consolas,monospace; color:var(--txt);
                min-width:118px; }
   .attr.chg .attr-name { color:var(--warn); }
-  .attr-val { font:12.5px ui-monospace,Consolas,monospace; color:var(--acc); }
+  .attr-val { font:12.5px ui-monospace,Consolas,monospace; color:var(--acc);
+              overflow-wrap:anywhere; }
+  .colR .fr-row, .colR .lpchip, .instfr b { overflow-wrap:anywhere; }
   .attr.chg .attr-val { color:var(--warn); font-weight:600; }
   .attr-doc { font-size:12px; color:var(--mut); margin-top:2px; }
   .attr-chgtag { font-size:10.5px; color:var(--warn); margin-left:6px; }
@@ -134,7 +139,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="panel"><h2 id="srcname"></h2><div id="src"></div></div>
     <div class="panel"><h2 id="cname"></h2><div id="bc"></div></div>
   </div>
-  <div>
+  <div class="colR">
     <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중, 아래 = 호출한 프레임)</h2><div id="stk"></div>
       <div class="fr-legend">한 프레임의 <b>localsplus</b> = 지역(fast) · 셀(cell) · 자유(free) 를 한 배열에 두고 그 뒤에 값 스택.
         <span class="lpchip param">매개변수</span> <span class="lpchip cellv">셀</span> <span class="lpchip freev">자유</span> <span class="lpchip unset">미설정</span></div>
