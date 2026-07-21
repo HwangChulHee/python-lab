@@ -62,6 +62,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .stbadge.st-CREATED { color:#2f6fce; background:#e9f1fc; }
   .stbadge.st-RUNNING { color:#2f8f4e; background:#e6f4ec; }
   .stbadge.st-COMPLETED { color:#8b897f; background:#eeece5; }
+  .panel.inst { border-color:#a9cdb5; background:#f3faf5; }
+  .panel.inst h2 { color:#2f8f4e; }
+  .instfr { border-color:#a9cdb5; }
+  .instfr.chg { background:var(--warnbg); border-color:#ecd9ae; }
+  .instfr b { font-family:ui-monospace,Consolas,monospace; }
   .stack-cells { display:flex; gap:6px; flex-wrap:wrap; margin-top:3px; }
   .cell { padding:1px 9px; border-radius:6px; background:var(--warnbg);
           color:var(--warn); border:1px solid #ecd9ae;
@@ -110,6 +115,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div>
     <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중)</h2><div id="stk"></div></div>
     <div class="panel held" id="heldpanel" style="display:none"><h2>보관된 프레임 · 제너레이터 (소멸 아님, ip·값 스택 보존)</h2><div id="held"></div></div>
+    <div class="panel inst" id="instpanel" style="display:none"><h2>인스턴스 · __dict__와 type().__mro__ (STORE_ATTR 시 diff 강조)</h2><div id="inst"></div></div>
     <div class="desc" id="desc"></div>
     <div class="opdoc" id="opdoc">바이트코드 줄을 클릭하면 그 명령의 설명이 여기 고정 표시됩니다.</div>
     <details class="ins" open><summary>코드 객체 속성 <span class="badge">불변 · 컴파일 시점 확정</span></summary><div id="codeattrs"></div></details>
@@ -202,6 +208,16 @@ function render() {
         <div class="stack-cells">${f.stack.length
           ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
           : '<span class="cell empty">비어 있음</span>'}</div>
+      </div>`).join("");
+
+  // -- 인스턴스 (__dict__ · MRO) --
+  const insts = s.instances ?? [];
+  $("instpanel").style.display = insts.length ? "" : "none";
+  $("inst").innerHTML = insts.map(o => `
+      <div class="fr instfr ${o.changed ? "chg" : ""}">
+        <div class="fr-name">${esc(o.label)}</div>
+        <div class="fr-row">__dict__: <b>${esc(o.dict)}</b>${o.changed ? ' <span class="attr-chgtag">← 변경됨</span>' : ""}</div>
+        <div class="fr-row">MRO: ${esc(o.mro)}</div>
       </div>`).join("");
 
   // -- 설명 --

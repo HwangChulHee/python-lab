@@ -21,8 +21,9 @@ CPython ceval의 뼈대만 재현한다. 핵심 설계는 '프레임 스택 리�
 import inspect
 import textwrap
 
-from .frame import Frame, fmt, fmt_cell, reset_obj_labels
+from .frame import Frame, fmt, fmt_cell, reset_obj_labels, _obj_label
 from .generator import MiniGenerator, gsend
+from .classes import BUILD_CLASS
 from .inspector import code_attr_snapshot, func_attr_values, build_func_attrs
 from .opcodes import OPCODE_HANDLERS, OPCODE_DOCS
 
@@ -38,7 +39,10 @@ class MiniPVM:
         self.names = {}                        # {코드key: 사람이 읽는 함수 이름} (뷰어 표시용)
         self.steps = []                        # 스텝 스냅샷 목록              (뷰어용)
         self.generators = []                   # 만들어진 MiniGenerator 전부 (보관 프레임 표시용)
+        self.user_classes = set()              # 우리가 만든 클래스들 (인스턴스 생성 가로채기용)
+        self.instances = []                    # 만들어진 인스턴스들 (인스턴스 패널 + __dict__ diff)
         self._last_func_snap = {}              # {id(func): {속성:값}} — diff 계산용
+        self._last_inst_snap = {}              # {id(inst): __dict__ 문자열} — diff 계산용
         reset_obj_labels()                     # <objN> 라벨을 트레이스마다 초기화
 
     # ---------------------------------------------------------- 진입점: CALL의 최초 형태
@@ -92,6 +96,41 @@ class MiniPVM:
                     self.record(f"CALL {drv}({gen.label}) — 보관된 제너레이터를 재개하라는 요청",
                                 executed, ins)
                     self._resume_generator(gen, sent, ("next", frame))
+                    continue
+
+                # 클래스 짓기 가로채기: __build_class__(본문함수, 이름, 베이스...).
+                # 클래스 본문을 '우리 프레임'으로 실행하려고 C 위임 대신 직접 태운다.
+                if target is BUILD_CLASS:
+                    body_func, name, bases = args[0], args[1], tuple(args[2:])
+                    self.record(f"CALL __build_class__ — 클래스 '{name}'의 본문을 새 "
+                                f"네임스페이스 dict에서 프레임으로 실행 (본문도 코드다)", executed, ins)
+                    body_frame = Frame(body_func, [])
+                    body_frame.namespace = {}
+                    body_frame.produces = ("class", name, bases, body_frame.namespace)
+                    self._capture_code(body_frame)
+                    self.frame_stack.append(body_frame)
+                    self.record(f"{name} 클래스 본문 프레임 push — STORE_NAME이 네임스페이스 "
+                                f"dict를 채운다 (그 dict가 곧 클래스 __dict__)", None, None)
+                    continue
+
+                # 인스턴스 생성 가로채기: 우리가 만든 클래스를 호출하면 __init__을 프레임으로 실행.
+                if target in self.user_classes:
+                    obj = target.__new__(target)
+                    self.instances.append(obj)
+                    init = getattr(target, "__init__", None)
+                    self.record(f"CALL {target.__name__}(...) — 인스턴스 생성(__new__). "
+                                f"__init__이 있으면 프레임으로 실행", executed, ins)
+                    if hasattr(init, "__code__"):                # 파이썬 정의 __init__ (object.__init__은 __code__ 없음)
+                        init_frame = Frame(init, [obj] + args)   # self = obj가 첫 지역 변수
+                        init_frame.produces = ("init", obj)
+                        self._capture_code(init_frame)
+                        self.frame_stack.append(init_frame)
+                        self.record(f"{target.__name__}.__init__ 프레임 push — self가 "
+                                    f"첫 지역 변수로 들어온다", None, None)
+                    else:                                        # __init__ 없음 → 인스턴스 바로 반환
+                        frame.value_stack.append(obj)
+                        self.record(f"{target.__name__} 인스턴스를 호출자 스택에 push "
+                                    f"(__init__ 없음)", None, None)
                     continue
 
                 self.record(
@@ -163,6 +202,23 @@ class MiniPVM:
                         for_frame.ip = target
                         self.record("소진 감지 → for 루프를 빠져나감 (남은 제너레이터는 "
                                     "END_FOR가 정리)", None, None)
+                    continue
+
+                if frame.produces is not None:             # 클래스 본문 / __init__ 특수 산출 (P4)
+                    kind = frame.produces[0]
+                    if kind == "class":
+                        _, name, bases, ns = frame.produces
+                        cls = type(name, bases, dict(ns))  # 네임스페이스 dict → 클래스 객체
+                        self.user_classes.add(cls)
+                        self.record(f"클래스 본문 종료 → type('{name}', {tuple(b.__name__ for b in bases)}, "
+                                    f"네임스페이스)로 클래스 객체 생성", None, ins)
+                        produced = cls
+                    else:                                  # ("init", obj)
+                        produced = frame.produces[1]
+                        self.record(f"__init__ 종료 → 초기화된 인스턴스를 호출자에게 반환", None, ins)
+                    if self.frame_stack:
+                        self.frame_stack[-1].value_stack.append(produced)
+                        self.record(f"{fmt(produced)}이 호출자 스택에 push", None, None)
                     continue
 
                 self.record(f"{op} — {frame.func_name} 프레임 통째로 소멸, {value!r} 반환",
@@ -250,12 +306,30 @@ class MiniPVM:
             "action": action,
             "frames": frames,                  # 아래(먼저 쌓인 것) → 위 순서
             "held": held,                      # 보관된 제너레이터 프레임들
+            "instances": self._instance_snapshots(),   # 만들어진 인스턴스들 (__dict__ diff)
             "exec": executed_index,            # 하이라이트할 명령 인덱스 (None 가능)
             "key": top.listing_key if top else None,
             "line": (ins.positions.lineno if ins and ins.positions else None),
             "opname": ins.opname if ins else None,
             "func_attrs": self._func_attrs_with_diff(top.func) if top else [],
         })
+
+    def _instance_snapshots(self):
+        """만들어진 인스턴스들의 __dict__·MRO 스냅샷 + 직전 스텝과의 __dict__ diff."""
+        out = []
+        for obj in self.instances:
+            d = repr(obj.__dict__)
+            oid = id(obj)
+            changed = oid in self._last_inst_snap and self._last_inst_snap[oid] != d
+            self._last_inst_snap[oid] = d
+            out.append({
+                "label": f"{type(obj).__name__} 인스턴스<{_obj_label(obj)}>",
+                "cls": type(obj).__name__,
+                "mro": " → ".join(k.__name__ for k in type(obj).__mro__),
+                "dict": d,
+                "changed": changed,
+            })
+        return out
 
     def _held_snapshot(self, gen):
         """보관된 제너레이터 프레임 하나를 스냅샷(상태·보관된 ip·값 스택 그대로)."""

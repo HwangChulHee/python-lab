@@ -49,6 +49,8 @@ class Frame:
 
         self.ip = 0                            # 명령 포인터 (instructions 리스트의 인덱스)
         self.generator = None                  # 이 프레임이 제너레이터의 것이면 그 MiniGenerator (P3)
+        self.namespace = None                  # 클래스 본문 프레임의 이름 dict (STORE_NAME/LOAD_NAME) (P4)
+        self.produces = None                   # RETURN 시 특수 산출: ("class",...) / ("init", obj) (P4)
 
         # 코드 객체를 유일하게 식별하는 키. co_qualname을 쓰면 같은 코드 객체를 공유하는
         # 함수(add1/add5)는 같은 키로 묶이고(정확), 서로 다른 코드 객체는 다른 키가 된다.
@@ -82,14 +84,22 @@ def _short_repr(v):
 
 def fmt(v):
     """값 스택/지역 변수의 값을 짧은 문자열로. (뷰어 표시용 공통 규칙)"""
+    lbl = getattr(v, "_pvm_label", None)       # 엔진 마커용 표시 훅 (예: __build_class__)
+    if lbl:
+        return lbl
     if isinstance(v, types.CellType):
         return f"셀({fmt_cell(v)})"
     if isinstance(v, (list, dict, set)):
         return f"{_short_repr(v)} <{_obj_label(v)}>"   # 가변 객체 → 객체 라벨 부착
+    if isinstance(v, type):
+        return f"{v.__name__} 클래스"          # 클래스(type)도 콜러블이지만 함수 아님
     if callable(v) and hasattr(v, "__name__"):
         return f"{v.__name__} 함수객체"         # 함수 객체는 이름만
     if v is None:
         return "NULL"                          # PUSH_NULL이 깔아둔 자리표시자
+    # 사용자 정의 클래스의 인스턴스 — 짧게 (상세 __dict__는 인스턴스 패널에서)
+    if hasattr(v, "__dict__") and not isinstance(v, types.ModuleType) and not callable(v):
+        return f"{type(v).__name__} 인스턴스<{_obj_label(v)}>"
     return _short_repr(v)
 
 

@@ -134,3 +134,66 @@
   변형이 method+self를 스택에 올림)와 자연히 맞물릴 것. LOAD_ATTR에서 method 형태를
   push하면 CALL이 그대로 소비한다.
 - 값 스택 NULL=None 겸용은 P3까지 문제 없었음(gsend는 실제 None을 인자로 밀지 않음).
+
+---
+
+## P4 — 속성 접근과 클래스 (14/15/16장)
+
+### 구현 요약
+- **새 파일**
+  - `engine/classes.py` — BUILD_CLASS 마커(__build_class__를 엔진이 가로채기 위한).
+  - `engine/opcodes/attributes.py` — LOAD_BUILD_CLASS, STORE_NAME, LOAD_NAME,
+    STORE_ATTR, LOAD_ATTR(일반 + 메서드 변형) + 조회 경로 서술 헬퍼.
+  - `demos/ch14_classes.py`, `demos/ch15_attribute_lookup.py`, `demos/ch16_mro.py`.
+- **엔진 변경**
+  - `Frame.namespace`(클래스 본문의 이름 dict), `Frame.produces`(RETURN 시 특수 산출).
+  - CALL에 두 가로채기 추가:
+    · `__build_class__` → 클래스 본문을 새 네임스페이스 dict를 가진 프레임으로 실행,
+      RETURN 시 `type(name, bases, ns)`로 클래스 객체 생성.
+    · 우리가 만든 클래스 호출 → `__new__`로 인스턴스 만들고, 파이썬 `__init__`이 있으면
+      `(obj, *args)`로 프레임 실행(self가 첫 지역 변수), RETURN 시 인스턴스 반환.
+  - `MiniPVM.user_classes`(가로챌 클래스 집합), `instances`(만든 인스턴스), 인스턴스
+    `__dict__` diff 계산(`_instance_snapshots`).
+- **뷰어**: '인스턴스' 패널 신설(__dict__ + type().__mro__, STORE_ATTR 시 diff 강조).
+  LOAD_ATTR 조회 경로는 스텝 설명에 화살표로 직접 서술.
+- **fmt 확장**: 클래스는 "이름 클래스", 인스턴스는 "이름 인스턴스<objN>", 엔진 마커는
+  `_pvm_label` 훅으로 표시.
+
+### 내린 설계 판단과 이유
+- **__build_class__를 C 위임하지 않고 엔진이 가로챈다**: 진짜 __build_class__는 C라서
+  그대로 부르면 클래스 본문이 C 안에서 돌아 우리 루프에 안 잡힌다. LOAD_BUILD_CLASS가
+  마커를 올리고 CALL이 그걸 알아봐 본문을 '우리 프레임'으로 실행 → "클래스 본문도
+  프레임에서 실행되는 코드"라는 P4 하이라이트 1이 그대로 나온다. 클래스 객체 자체는
+  표준 `type(name, bases, ns)`로 만든다(진짜 클래스).
+- **인스턴스 생성도 가로채 __init__을 프레임으로 실행**: `Dog("초코")`를 C에 위임하면
+  __init__이 C에서 돌아 안 보인다. `__new__`로 인스턴스만 만들고 파이썬 __init__을
+  루프로 실행해 self·STORE_ATTR·__dict__ 성장을 눈에 보이게 했다. object.__init__(슬롯
+  래퍼, __code__ 없음)만 있는 클래스는 인스턴스를 바로 반환.
+- **LOAD_ATTR: 값은 getattr에 위임, 경로는 직접 서술**: 실제 값은 getattr로 정확히
+  얻되(디스크립터/바인딩 정확), 조회 경로(인스턴스 __dict__ → MRO 각 클래스)는 별도로
+  계산해 화살표로 그린다 — P4 하이라이트 2(15장 "속성 접근의 진실").
+- **메서드 변형(arg & 1)은 (함수, self)를 push**: CALL 규약이 P3에서 이미 self 슬롯을
+  처리하므로, 메서드 변형이 [함수, self]를 올리면 CALL이 self를 첫 인자로 그대로 소비한다.
+  P3의 CALL 수정이 여기서 값을 한다.
+- **super()/LOAD_SUPER_ATTR는 미구현(스트레치)**: 핸드오프대로 데모에서 제외. MRO는
+  다이아몬드 상속 + 일반 메서드 조회로 충분히 보인다. 필요 시 P4+에서 추가.
+
+### 실측에서 확정한 opcode (예상과 다른 점)
+- 클래스 본문은 `LOAD_NAME __name__ → STORE_NAME __module__`, `STORE_NAME __qualname__`
+  로 시작하고 속성들을 STORE_NAME으로 쌓은 뒤 `RETURN_CONST None`.
+- `self.x = v`는 `STORE_ATTR`(TOS=obj, TOS1=value), `self.x` 읽기는 `LOAD_ATTR`(arg&1=0).
+- 메서드 호출 `d.f()`는 `LOAD_ATTR (NULL|self + f)`(arg&1=1) + `CALL`.
+- 예상에 있던 별도 LOAD_METHOD는 없음 — 3.12는 LOAD_ATTR 메서드 변형으로 통합.
+
+### 검증 결과 (전부 통과)
+- 데모 19개(P1 5 + P2 6 + P3 4 + P4 4) 전부 진짜 CPython과 assert 대조 OK, `run.py` 무에러.
+- 검증2: ch14 class_stmt 트레이스에 클래스 본문 프레임(Point) 등장.
+- 검증3: ch15 섀도잉에서 같은 c.tag의 조회 경로가 인스턴스 속성 유무로 달라짐
+  (인스턴스 ✗ → C ✓  vs  인스턴스 ✓).
+- 검증4: ch14 인스턴스 __dict__ diff가 __init__ 실행 중 잡힘({'name': '초코'}).
+
+### 다음 페이즈(P5)에 넘긴 것
+- P5는 스테퍼가 아닌 별도 계기판 2종(refcount, eventloop). 뷰어 껍데기(스텝 내비게이션·
+  스타일 토큰)만 공유하고 패널 구성은 새로 짠다. run.py에 서브커맨드로 연결.
+- eventloop는 P3의 MiniGenerator를 태스크로 재사용 — "이벤트 루프 = 보관된 프레임들을
+  번갈아 재개하는 스케줄러"를 실물로 증명하는 것이 설계 의도.
