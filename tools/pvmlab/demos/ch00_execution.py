@@ -79,3 +79,30 @@ def name_lookup():
 def append_to(item, bucket=[]):
     bucket += [item]
     return bucket
+
+@demo("⑥ u2 유제3 — @deco 와 손수 f=deco(f) 는 같은가 (deco_style)")
+def deco_style():
+    def logger(fn):            # 고정 인자 래퍼 (*args는 CALL_FUNCTION_EX 필요 — 미구현)
+        def wrapper(x, y):
+            return fn(x, y)
+        return wrapper
+
+    @logger
+    def add(x, y):
+        return x + y
+
+    return add(1, 2)           # 3
+
+
+@demo("⑦ u2 유제3 — 손수 치환 (manual_style): STORE 가 한 번 더 있다")
+def manual_style():
+    def logger(fn):
+        def wrapper(x, y):
+            return fn(x, y)
+        return wrapper
+
+    def sub(x, y):
+        return x - y
+    sub = logger(sub)          # ← @logger 와 같은 일
+
+    return sub(5, 3)           # 2

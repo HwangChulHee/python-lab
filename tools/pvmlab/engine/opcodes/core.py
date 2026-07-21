@@ -75,7 +75,8 @@ def _push_null(pvm, frame, ins):
 
 # ================================================================ 값 내리기 (pop)
 @opcode("STORE_FAST",
-        "스택 맨 위를 pop해서 지역 변수 배열(co_varnames 인덱스)에 저장. 스택효과 -1")
+        "스택 맨 위를 pop해서 프레임의 지역 변수 배열에 저장. "
+        "인자는 co_varnames의 인덱스(어느 이름인지 가리킬 뿐, 저장은 프레임에). 스택효과 -1")
 def _store_fast(pvm, frame, ins):
     frame.local_vars[ins.argval] = frame.value_stack.pop()
     return f"pop → 지역 변수 {ins.argval}에 저장"
