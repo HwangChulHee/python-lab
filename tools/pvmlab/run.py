@@ -86,9 +86,20 @@ def run_demo(spec):
 def main():
     parser = argparse.ArgumentParser(description="pvmlab — CPython 실행 모델 미니 재현")
     parser.add_argument("chapter", nargs="?", default=None,
-                        help="데모 장 접두어 (예: ch00). 생략하면 demos/ 전체")
-    parser.add_argument("-o", "--out", default="pvm_trace.html", help="출력 HTML 경로")
+                        help="데모 장 접두어(예: ch00), 또는 별도 계기판: refcount / eventloop. "
+                             "생략하면 스테퍼 demos/ 전체")
+    parser.add_argument("-o", "--out", default=None, help="출력 HTML 경로")
     ns = parser.parse_args()
+
+    # P5 별도 계기판 — 스테퍼가 아니라 독립 도구 (뷰어 껍데기만 공유)
+    if ns.chapter == "refcount":
+        import refcount
+        refcount.build(ns.out or "refcount.html")
+        return
+    if ns.chapter == "eventloop":
+        import eventloop
+        eventloop.build(ns.out or "eventloop.html")
+        return
 
     specs = load_demos(ns.chapter)
     if not specs:
@@ -104,8 +115,9 @@ def main():
             f"미니 PVM이 CPython과 다른 결과를 냈습니다: {result!r} != {expected!r}"
         traces.append(trace)
 
-    build_html(traces, ns.out)
-    print(f"\n생성 완료 → {ns.out}  (브라우저로 열기, 데모 {len(traces)}개)")
+    out = ns.out or "pvm_trace.html"
+    build_html(traces, out)
+    print(f"\n생성 완료 → {out}  (브라우저로 열기, 데모 {len(traces)}개)")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>pvmlab — 미니 이벤트 루프</title>
+<style>
+  :root { --bg:#faf9f5; --card:#ffffff; --line:#e3e1d9; --txt:#26251f;
+          --mut:#8b897f; --sub:#5f5e56; --acc:#2f6fce; --accbg:#e9f1fc;
+          --sleep:#cfe3f7; --work:#e0876f; --run:#2f8f4e; --done:#c8c6bd; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); padding:26px 20px 60px;
+         font:15px/1.6 system-ui,'Apple SD Gothic Neo','Malgun Gothic',sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; }
+  h1 { font-size:19px; font-weight:600; margin-bottom:4px; }
+  .sub { font-size:14px; color:var(--sub); margin-bottom:14px; }
+  select { font:inherit; padding:6px 10px; border:1px solid var(--line);
+           border-radius:8px; background:var(--card); margin-bottom:14px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
+           padding:14px; margin-bottom:14px; }
+  .panel h2 { font-size:12px; font-weight:500; color:var(--mut); margin-bottom:11px; }
+  .gantt { position:relative; }
+  .grow { display:grid; grid-template-columns:44px 1fr; gap:8px; align-items:center;
+          margin-bottom:7px; }
+  .gname { font:600 13px ui-monospace,Consolas,monospace; text-align:right; color:var(--sub); }
+  .track { position:relative; height:22px; background:var(--bg); border:1px solid var(--line);
+           border-radius:5px; overflow:hidden; }
+  .seg { position:absolute; top:0; height:100%; border-radius:4px; font:10.5px ui-monospace,monospace;
+         color:#3a3a34; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .seg.sleep { background:var(--sleep); }
+  .seg.work { background:var(--work); color:#fff; }
+  .seg.done { background:var(--done); width:3px!important; }
+  .playhead { position:absolute; top:0; bottom:0; width:2px; background:var(--acc); z-index:5; }
+  .axis { position:relative; height:16px; margin-left:52px; margin-top:2px; color:var(--mut);
+          font:10.5px ui-monospace,monospace; }
+  .tick { position:absolute; transform:translateX(-50%); }
+  .states { display:flex; gap:8px; flex-wrap:wrap; }
+  .st { border:1px solid var(--line); border-radius:8px; padding:6px 10px; font:12.5px ui-monospace,monospace; }
+  .st .nm { font-weight:600; }
+  .st.RUNNING { border-color:var(--run); background:#e9f6ee; }
+  .st.SLEEPING { border-color:#9cc2ea; background:var(--accbg); }
+  .st.READY { background:var(--card); }
+  .st.DONE { opacity:.5; }
+  .badge { font-size:10.5px; margin-left:5px; }
+  .desc { padding:12px 15px; border:1px solid #bcd3f0; background:var(--accbg);
+          border-radius:10px; color:#1c4d94; min-height:52px; margin-top:12px; }
+  .nav { display:flex; align-items:center; gap:12px; margin-top:14px; }
+  button { font:inherit; padding:8px 18px; border:1px solid var(--line);
+           border-radius:8px; background:var(--card); cursor:pointer; }
+  button:disabled { opacity:.35; cursor:default; }
+  input[type=range] { flex:1; }
+  .pos { font-size:13px; color:var(--mut); min-width:64px; text-align:right; }
+  .legend { font-size:12px; color:var(--mut); margin-top:8px; }
+  .sw { display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:-1px; margin:0 3px 0 10px; }
+</style></head><body><div class="wrap">
+<h1>pvmlab — 미니 이벤트 루프</h1>
+<div class="sub">이벤트 루프 = 보관된 프레임(제너레이터)들을 가상 시계에 맞춰 번갈아 재개하는 스케줄러.</div>
+<select id="sc"></select>
+<div class="panel">
+  <h2 id="gtitle">타임라인 (가로 = 가상 시간, 파란 선 = 현재 시계)</h2>
+  <div class="gantt" id="gantt"></div>
+  <div class="axis" id="axis"></div>
+  <div class="legend"><span class="sw" style="background:var(--sleep)"></span>sleep(대기)<span class="sw" style="background:var(--work)"></span>work(계산 점유)<span class="sw" style="background:var(--done)"></span>done</div>
+</div>
+<div class="panel"><h2>태스크 상태 (현재 스텝)</h2><div class="states" id="states"></div></div>
+<div class="desc" id="desc"></div>
+<div class="nav">
+  <button id="prev">← 이전</button><button id="next">다음 →</button>
+  <input type="range" id="slider" min="0" value="0"><span class="pos" id="pos"></span>
+</div>
+</div>
+<script>
+const DATA = [{"title": "① 협조적 3태스크 — 프레임들이 번갈아 보관·재개된다", "subtitle": "세 태스크가 서로 다른 주기로 sleep. 스케줄러가 가상 시계를 진행하며 깨어난 프레임을 재개한다.", "tasks": ["A", "B", "C"], "segments": [{"task": "A", "start": 0, "end": 10, "kind": "sleep"}, {"task": "B", "start": 0, "end": 15, "kind": "sleep"}, {"task": "C", "start": 0, "end": 25, "kind": "sleep"}, {"task": "A", "start": 10, "end": 20, "kind": "sleep"}, {"task": "B", "start": 15, "end": 30, "kind": "sleep"}, {"task": "A", "start": 20, "end": 30, "kind": "sleep"}, {"task": "C", "start": 25, "end": 25, "kind": "done"}, {"task": "B", "start": 30, "end": 30, "kind": "done"}, {"task": "A", "start": 30, "end": 30, "kind": "done"}], "end": 30, "steps": [{"clock": 0, "action": "시작 — 모든 태스크 READY (가상 시계 0). 스케줄러가 하나씩 재개한다.", "states": [{"task": "A", "state": "READY", "wake": null, "line": null}, {"task": "B", "state": "READY", "wake": null, "line": null}, {"task": "C", "state": "READY", "wake": null, "line": null}]}, {"clock": 0, "action": "T=0 · A 재개 → yield sleep(10). 프레임을 보관(SLEEPING), 10에 깨우도록 예약", "states": [{"task": "A", "state": "SLEEPING", "wake": 10, "line": 103}, {"task": "B", "state": "READY", "wake": null, "line": null}, {"task": "C", "state": "READY", "wake": null, "line": null}]}, {"clock": 0, "action": "T=0 · B 재개 → yield sleep(15). 프레임을 보관(SLEEPING), 15에 깨우도록 예약", "states": [{"task": "A", "state": "SLEEPING", "wake": 10, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 15, "line": 103}, {"task": "C", "state": "READY", "wake": null, "line": null}]}, {"clock": 0, "action": "T=0 · C 재개 → yield sleep(25). 프레임을 보관(SLEEPING), 25에 깨우도록 예약", "states": [{"task": "A", "state": "SLEEPING", "wake": 10, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 15, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 10, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 10로 진행. 깨어남: A", "states": [{"task": "A", "state": "READY", "wake": null, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 15, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 10, "action": "T=10 · A 재개 → yield sleep(10). 프레임을 보관(SLEEPING), 20에 깨우도록 예약", "states": [{"task": "A", "state": "SLEEPING", "wake": 20, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 15, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 15, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 15로 진행. 깨어남: B", "states": [{"task": "A", "state": "SLEEPING", "wake": 20, "line": 103}, {"task": "B", "state": "READY", "wake": null, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 15, "action": "T=15 · B 재개 → yield sleep(15). 프레임을 보관(SLEEPING), 30에 깨우도록 예약", "states": [{"task": "A", "state": "SLEEPING", "wake": 20, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 20, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 20로 진행. 깨어남: A", "states": [{"task": "A", "state": "READY", "wake": null, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 20, "action": "T=20 · A 재개 → yield sleep(10). 프레임을 보관(SLEEPING), 30에 깨우도록 예약", "states": [{"task": "A", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "C", "state": "SLEEPING", "wake": 25, "line": 103}]}, {"clock": 25, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 25로 진행. 깨어남: C", "states": [{"task": "A", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "C", "state": "READY", "wake": null, "line": 103}]}, {"clock": 25, "action": "T=25 · C 재개 → 본문 종료(DONE). 프레임 소멸", "states": [{"task": "A", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "B", "state": "SLEEPING", "wake": 30, "line": 103}, {"task": "C", "state": "DONE", "wake": null, "line": null}]}, {"clock": 30, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 30로 진행. 깨어남: B, A", "states": [{"task": "A", "state": "READY", "wake": null, "line": 103}, {"task": "B", "state": "READY", "wake": null, "line": 103}, {"task": "C", "state": "DONE", "wake": null, "line": null}]}, {"clock": 30, "action": "T=30 · B 재개 → 본문 종료(DONE). 프레임 소멸", "states": [{"task": "A", "state": "READY", "wake": null, "line": 103}, {"task": "B", "state": "DONE", "wake": null, "line": null}, {"task": "C", "state": "DONE", "wake": null, "line": null}]}, {"clock": 30, "action": "T=30 · A 재개 → 본문 종료(DONE). 프레임 소멸", "states": [{"task": "A", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "DONE", "wake": null, "line": null}, {"task": "C", "state": "DONE", "wake": null, "line": null}]}, {"clock": 30, "action": "모두 DONE — 이벤트 루프 종료 (가상 시계 30)", "states": [{"task": "A", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "DONE", "wake": null, "line": null}, {"task": "C", "state": "DONE", "wake": null, "line": null}]}], "order": ["A", "B", "C", "A", "B", "A", "C", "B", "A"]}, {"title": "② 블로킹의 참사 — 한 태스크가 양보 안 하면 나머지가 굶는다", "subtitle": "G가 work(20)으로 시계를 20까지 점유하는 동안 B는 한 번도 실행되지 못한다.", "tasks": ["G", "B"], "segments": [{"task": "G", "start": 0, "end": 20, "kind": "work"}, {"task": "B", "start": 20, "end": 24, "kind": "sleep"}, {"task": "G", "start": 20, "end": 20, "kind": "done"}, {"task": "B", "start": 24, "end": 28, "kind": "sleep"}, {"task": "B", "start": 28, "end": 32, "kind": "sleep"}, {"task": "B", "start": 32, "end": 32, "kind": "done"}], "end": 32, "steps": [{"clock": 0, "action": "시작 — 모든 태스크 READY (가상 시계 0). 스케줄러가 하나씩 재개한다.", "states": [{"task": "G", "state": "READY", "wake": null, "line": null}, {"task": "B", "state": "READY", "wake": null, "line": null}]}, {"clock": 20, "action": "T=0 · G 재개 → yield work(20). 20단위 계산으로 시계를 20까지 밀어붙임 — 이 동안 다른 태스크는 한 발도 못 나간다(굶음)", "states": [{"task": "G", "state": "READY", "wake": null, "line": 108}, {"task": "B", "state": "READY", "wake": null, "line": null}]}, {"clock": 20, "action": "T=20 · B 재개 → yield sleep(4). 프레임을 보관(SLEEPING), 24에 깨우도록 예약", "states": [{"task": "G", "state": "READY", "wake": null, "line": 108}, {"task": "B", "state": "SLEEPING", "wake": 24, "line": 113}]}, {"clock": 20, "action": "T=20 · G 재개 → 본문 종료(DONE). 프레임 소멸", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "SLEEPING", "wake": 24, "line": 113}]}, {"clock": 24, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 24로 진행. 깨어남: B", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "READY", "wake": null, "line": 113}]}, {"clock": 24, "action": "T=24 · B 재개 → yield sleep(4). 프레임을 보관(SLEEPING), 28에 깨우도록 예약", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "SLEEPING", "wake": 28, "line": 113}]}, {"clock": 28, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 28로 진행. 깨어남: B", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "READY", "wake": null, "line": 113}]}, {"clock": 28, "action": "T=28 · B 재개 → yield sleep(4). 프레임을 보관(SLEEPING), 32에 깨우도록 예약", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "SLEEPING", "wake": 32, "line": 113}]}, {"clock": 32, "action": "⏰ 실행할 태스크 없음 → 가상 시계를 32로 진행. 깨어남: B", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "READY", "wake": null, "line": 113}]}, {"clock": 32, "action": "T=32 · B 재개 → 본문 종료(DONE). 프레임 소멸", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "DONE", "wake": null, "line": null}]}, {"clock": 32, "action": "모두 DONE — 이벤트 루프 종료 (가상 시계 32)", "states": [{"task": "G", "state": "DONE", "wake": null, "line": null}, {"task": "B", "state": "DONE", "wake": null, "line": null}]}], "order": ["G", "B", "G", "B", "B", "B"]}];
+let d = 0, i = 0;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const sel = $("sc");
+DATA.forEach((t, n) => sel.add(new Option(t.title, n)));
+sel.onchange = () => { d = +sel.value; i = 0; render(); };
+
+function render() {
+  const t = DATA[d], s = t.steps[i], end = t.end;
+  $("slider").max = t.steps.length - 1; $("slider").value = i;
+  const pct = v => (v / end * 100);
+  // 간트
+  $("gantt").innerHTML = t.tasks.map(name => {
+    const segs = t.segments.filter(g => g.task === name).map(g => {
+      const w = Math.max(g.kind==="done"?0:1.2, pct(g.end - g.start));
+      const label = g.kind==="sleep" ? "sleep" : (g.kind==="work" ? "work "+(g.end-g.start) : "");
+      return `<div class="seg ${g.kind}" style="left:${pct(g.start)}%;width:${w}%">${label}</div>`;
+    }).join("");
+    return `<div class="grow"><div class="gname">${esc(name)}</div>
+      <div class="track">${segs}</div></div>`;
+  }).join("") + `<div class="playhead"></div>`;   // 위치는 아래 positionPlayhead가 픽셀로 설정
+  // 축
+  const ticks = [];
+  const stepv = Math.max(1, Math.round(end/8));
+  for (let v=0; v<=end; v+=stepv) ticks.push(`<span class="tick" style="left:${pct(v)}%">${v}</span>`);
+  $("axis").innerHTML = ticks.join("");
+  // 상태
+  $("states").innerHTML = s.states.map(st => {
+    let extra = "";
+    if (st.state === "SLEEPING") extra = `<span class="badge">→ ${st.wake}에 깨어남</span>`;
+    else if (st.state === "RUNNING" && st.line) extra = `<span class="badge">줄 ${st.line}에서</span>`;
+    return `<div class="st ${st.state}"><span class="nm">${esc(st.task)}</span> <span class="badge">${st.state}</span>${extra}</div>`;
+  }).join("");
+  $("gtitle").textContent = `타임라인 · ${t.subtitle}  (현재 시계 T=${s.clock})`;
+  $("desc").textContent = s.action;
+  $("pos").textContent = i + " / " + (t.steps.length - 1);
+  $("prev").disabled = i===0; $("next").disabled = i===t.steps.length-1;
+  // 재생 헤드 위치 보정 (트랙 시작 오프셋 52px 안에서)
+  positionPlayhead(pct(s.clock));
+}
+function positionPlayhead(p) {
+  const ph = document.querySelector(".playhead");
+  if (!ph) return;
+  const gantt = $("gantt");
+  const track = gantt.querySelector(".track");
+  if (!track) return;
+  const gRect = gantt.getBoundingClientRect(), tRect = track.getBoundingClientRect();
+  const x = (tRect.left - gRect.left) + tRect.width * p / 100;
+  ph.style.left = x + "px";
+}
+$("next").onclick = () => { if (i<DATA[d].steps.length-1){i++;render();} };
+$("prev").onclick = () => { if (i>0){i--;render();} };
+$("slider").oninput = e => { i=+e.target.value; render(); };
+document.onkeydown = e => { if(e.key==="ArrowRight")$("next").click(); if(e.key==="ArrowLeft")$("prev").click(); };
+window.addEventListener("resize", () => render());
+render();
+</script></body></html>

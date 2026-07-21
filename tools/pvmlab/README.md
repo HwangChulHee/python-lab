@@ -18,12 +18,16 @@
 
 ```bash
 cd tools/pvmlab
-python run.py                 # demos/ 전체 → pvm_trace.html
-python run.py ch00            # 'ch00'로 시작하는 데모 모듈만
+python run.py                 # 스테퍼 데모 전체 → pvm_trace.html
+python run.py ch00            # 'ch00'로 시작하는 데모 모듈만 (ch03/ch06/ch07/ch10/ch12/ch14/ch15/ch16 …)
 python run.py -o out.html     # 출력 경로 지정
+
+python run.py refcount        # 참조 카운트 추적기 (20장) → refcount.html
+python run.py eventloop       # 미니 이벤트 루프 (24/25장) → eventloop.html
 ```
 
-각 데모는 미니 PVM 실행 결과를 진짜 CPython과 `assert`로 대조한다("검증 OK").
+각 스테퍼 데모는 미니 PVM 실행 결과를 진짜 CPython과 `assert`로 대조한다("검증 OK").
+구현 페이즈별 설계 판단·검증 결과는 [REPORT.md](REPORT.md) 참조.
 
 ## 구조
 
