@@ -7,8 +7,10 @@ viewer.py — 트레이스(dict) → 단일 자족 HTML 문자열
 한 줄 요약(부제): 평가 루프가 코드 객체를 읽고, 프레임에 쓴다.
 
 트레이스 스키마(입력):
-  { title, listings, sources, code_attrs, steps }
-  step: { action, frames[], exec, key, line, opname, func_attrs[] }
+  { title, listings, sources, code_attrs, names, steps }
+  step: { action, frames[], held[], instances[], exec, key, line, opname, func_attrs[] }
+  frame: { name, key, active, fast[], cellvars[], freevars[], namespace, stack[],
+           ip_off, ip_op, line }   ← CPython localsplus 배치 그대로
 """
 
 import json
@@ -29,10 +31,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .sub { font-size:14px; color:var(--sub); margin-bottom:16px; }
   select { font:inherit; padding:6px 10px; border:1px solid var(--line);
            border-radius:8px; background:var(--card); margin-bottom:16px; }
-  .cols { display:grid; grid-template-columns:1.05fr 1fr; gap:14px; align-items:start; }
+  .cols { display:grid; grid-template-columns:1.02fr 1fr; gap:14px; align-items:start; }
+  .colL { position:sticky; top:14px; }         /* 코드 열은 위에 고정 — 스크롤해도 항상 보임 */
   .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
            padding:13px; margin-bottom:14px; }
   .panel h2 { font-size:12px; font-weight:500; color:var(--mut); margin-bottom:9px; }
+  /* 소스·바이트코드가 길어도 열 자체는 안 늘어나도록 각 패널 내부를 스크롤한다.
+     그래야 프레임 스택·코드 객체 속성이 옆에서 밀려나지 않는다. */
+  #src { position:relative; max-height:30vh; overflow:auto; }
+  #bc  { position:relative; max-height:44vh; overflow:auto; }
   .src-row, .bc-row { display:flex; gap:12px; padding:2.5px 9px; border-radius:6px;
             font:13px/1.65 ui-monospace,Consolas,monospace; color:var(--sub);
             white-space:pre; }
@@ -45,11 +52,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .fr { border:1px solid var(--line); border-radius:8px; padding:9px 12px;
         margin-bottom:8px; background:var(--card); }
   .fr.act { border-color:var(--acc); background:var(--accbg); }
-  .fr.wait { opacity:.5; }
+  .fr.wait { opacity:.78; }              /* 호출한(대기) 프레임의 변수도 또렷이 읽히게 */
   .fr-name { font:600 14px ui-monospace,Consolas,monospace; margin-bottom:5px; }
   .fr.act .fr-name { color:var(--acc); }
   .fr-row { font:12.5px ui-monospace,Consolas,monospace; color:var(--sub); }
-  .fr-row.cells { color:#6a4bb0; }
+  .frtag { font-size:11px; color:var(--mut); font-weight:400; }
+  .fr.act .frtag { color:var(--acc); }
+  .ipinfo { font:11px ui-monospace,monospace; color:var(--mut); font-weight:400; float:right; }
+  .lp-line { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0; }
+  .lp-tag { min-width:82px; font-size:11px; color:var(--mut); flex-shrink:0; }
+  .lpchip { padding:1px 8px; border-radius:6px; border:1px solid var(--line);
+            background:var(--card); font:12px ui-monospace,Consolas,monospace; color:var(--sub); }
+  .lpchip.param { border-color:#c9a9e6; background:#f5eefc; color:#6a3ea0; }
+  .lpchip.unset { color:var(--mut); border-style:dashed; background:none; }
+  .lpchip.cellref { color:#6a4bb0; border-style:dashed; background:none; }
+  .lpchip.cellv { border-color:#c9b8e6; background:#f4effb; color:#5a3ea0; }
+  .lpchip.freev { border-color:#a9cdb5; background:#eff8f2; color:#2f7a4a; }
+  .lpchip.nsv { border-color:#bcd3f0; background:var(--accbg); color:#1c4d94; }
+  .fr-legend { font-size:11px; color:var(--mut); margin-top:6px; }
+  .fr-legend .sw { display:inline-block; padding:0 6px; border-radius:5px; margin:0 2px;
+                   border:1px solid var(--line); }
   .panel.held { border-color:#c9b8e6; background:#f7f3fc; }
   .panel.held h2 { color:#6a4bb0; }
   .heldfr { border-style:dashed; }
@@ -108,12 +130,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="sub">평가 루프가 코드 객체를 <b>읽고</b>, 프레임에 <b>쓴다</b>. 노란 줄 = 지금 실행 중인 소스, 파란 줄 = 지금 실행 중인 바이트코드.</div>
 <select id="demo"></select>
 <div class="cols">
-  <div>
+  <div class="colL">
     <div class="panel"><h2 id="srcname"></h2><div id="src"></div></div>
     <div class="panel"><h2 id="cname"></h2><div id="bc"></div></div>
   </div>
   <div>
-    <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중)</h2><div id="stk"></div></div>
+    <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중, 아래 = 호출한 프레임)</h2><div id="stk"></div>
+      <div class="fr-legend">한 프레임의 <b>localsplus</b> = 지역(fast) · 셀(cell) · 자유(free) 를 한 배열에 두고 그 뒤에 값 스택.
+        <span class="lpchip param">매개변수</span> <span class="lpchip cellv">셀</span> <span class="lpchip freev">자유</span> <span class="lpchip unset">미설정</span></div>
+    </div>
     <div class="panel held" id="heldpanel" style="display:none"><h2>보관된 프레임 · 제너레이터 (소멸 아님, ip·값 스택 보존)</h2><div id="held"></div></div>
     <div class="panel inst" id="instpanel" style="display:none"><h2>인스턴스 · __dict__와 type().__mro__ (STORE_ATTR 시 diff 강조)</h2><div id="inst"></div></div>
     <div class="desc" id="desc"></div>
@@ -128,7 +153,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <input type="range" id="slider" min="0" value="0">
   <span class="pos" id="pos"></span>
 </div>
-<div class="hint">키보드 ← → 로도 이동. 노란 칸이 값 스택(왼쪽이 바닥, 오른쪽이 맨 위). 함수 객체 속성이 노랗게 강조되면 직전 스텝에서 값이 바뀐 것.</div>
+<div class="hint">키보드 ← → 로도 이동. 프레임마다 그 프레임의 <b>모든 실제 변수</b>(localsplus: 지역·셀·자유·값 스택)를 보여 준다 — 호출한(대기) 프레임의 변수도 함께. 소스·바이트코드 패널은 길어지면 안에서 스크롤되고 현재 줄로 자동 이동한다.</div>
 </div>
 <script>
 const DATA = __DATA__;
@@ -151,6 +176,38 @@ function attrRow(a) {
     <div class="attr-hd"><span class="attr-name">${esc(a.name)}</span>` +
     `<span class="attr-val">${esc(a.value)}</span>${tag}</div>` +
     `<div class="attr-doc">${esc(a.doc)}</div></div>`;
+}
+
+// localsplus 한 줄(라벨 + 칩들) 렌더
+function lpLine(tag, chipsHtml) {
+  return `<div class="lp-line"><span class="lp-tag">${tag}</span>${chipsHtml || '<span class="muttxt">—</span>'}</div>`;
+}
+
+// 프레임 하나의 '실제 변수 전부'를 localsplus 순서(지역·셀·자유·[네임스페이스]·값 스택)로
+function frameBody(f) {
+  let h = "";
+  // 지역(fast) — 미설정 슬롯·셀로 옮겨간 슬롯까지 그대로
+  const fast = (f.fast || []).map(v => {
+    if (v.slot === "unset") return `<span class="lpchip unset">${esc(v.name)} = (미설정)</span>`;
+    if (v.slot === "cell")  return `<span class="lpchip cellref">${esc(v.name)} → 셀 슬롯</span>`;
+    return `<span class="lpchip ${v.param ? "param" : ""}">${esc(v.name)} = ${esc(v.val)}</span>`;
+  }).join("");
+  h += lpLine("지역(fast)", fast);
+  if (f.cellvars && f.cellvars.length)
+    h += lpLine("셀(cell)", f.cellvars.map(v => `<span class="lpchip cellv">${esc(v.name)} ▸ ${esc(v.val)}</span>`).join(""));
+  if (f.freevars && f.freevars.length)
+    h += lpLine("자유(free)", f.freevars.map(v => `<span class="lpchip freev">${esc(v.name)} ▸ ${esc(v.val)}</span>`).join(""));
+  if (f.namespace)   // 클래스 본문 프레임 — 네임스페이스 dict가 실제 변수
+    h += lpLine("네임스페이스", Object.entries(f.namespace).map(([k,v]) => `<span class="lpchip nsv">${esc(k)} = ${esc(v)}</span>`).join(""));
+  h += lpLine("값 스택", (f.stack && f.stack.length)
+      ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
+      : '<span class="cell empty">비어 있음</span>');
+  return h;
+}
+
+function ipInfo(f) {
+  if (f.ip_off == null) return "";
+  return `<span class="ipinfo">IP → offset ${f.ip_off}${f.ip_op ? " · " + esc(f.ip_op) : ""}</span>`;
 }
 
 function render() {
@@ -179,36 +236,25 @@ function render() {
                         pinnedDoc = [r.op, r.doc]; showDoc(r.op, r.doc); };
   });
 
-  // -- 프레임 스택 --
+  // -- 프레임 스택 (localsplus 전체) --
   $("stk").innerHTML = s.frames.length === 0
     ? '<div class="muttxt" style="text-align:center;padding:24px 0">비어 있음 — 실행 종료</div>'
-    : s.frames.slice().reverse().map(f => `
-      <div class="fr ${f.active ? "act" : "wait"}">
-        <div class="fr-name">${esc(f.name)} 프레임 ${f.active ? "· 실행 중" : "· 대기(값 스택 유지)"}</div>
-        <div class="fr-row">지역 변수: ${Object.entries(f.locals).map(([k,v]) => esc(k)+" = "+esc(v)).join(", ") || "—"}</div>` +
-      ((f.cells && Object.keys(f.cells).length) ? `
-        <div class="fr-row cells">셀 변수: ${Object.entries(f.cells).map(([k,v]) => esc(k)+" ▸ "+esc(v)).join(", ")}</div>` : "") + `
-        <div class="fr-row">값 스택:</div>
-        <div class="stack-cells">${f.stack.length
-          ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
-          : '<span class="cell empty">비어 있음</span>'}</div>
-      </div>`).join("");
+    : s.frames.slice().reverse().map((f, ri) => {
+      const depth = s.frames.length - ri;   // 위에서부터 1, 2, ...
+      const role = f.active ? "· 실행 중" : "· 대기(호출한 프레임)";
+      return `<div class="fr ${f.active ? "act" : "wait"}">
+        <div class="fr-name">#${depth} ${esc(f.name)} 프레임 <span class="frtag">${role}</span>${ipInfo(f)}</div>
+        ${frameBody(f)}</div>`;
+    }).join("");
 
-  // -- 보관된 프레임 (제너레이터) --
+  // -- 보관된 프레임 (제너레이터) — 스택 프레임과 같은 localsplus 배치 --
   const held = s.held ?? [];
   $("heldpanel").style.display = held.length ? "" : "none";
   $("held").innerHTML = held.map(f => `
       <div class="fr heldfr st-${esc(f.state)}">
-        <div class="fr-name">${esc(f.label)} <span class="stbadge st-${esc(f.state)}">${esc(f.state)}</span></div>
-        <div class="fr-row">보관된 위치: offset ${f.ip_off ?? "—"}${f.line ? " (소스 " + f.line + "줄)" : ""}</div>
-        <div class="fr-row">지역 변수: ${Object.entries(f.locals).map(([k,v]) => esc(k)+" = "+esc(v)).join(", ") || "—"}</div>` +
-      ((f.cells && Object.keys(f.cells).length) ? `
-        <div class="fr-row cells">셀 변수: ${Object.entries(f.cells).map(([k,v]) => esc(k)+" ▸ "+esc(v)).join(", ")}</div>` : "") + `
-        <div class="fr-row">보관된 값 스택:</div>
-        <div class="stack-cells">${f.stack.length
-          ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
-          : '<span class="cell empty">비어 있음</span>'}</div>
-      </div>`).join("");
+        <div class="fr-name">${esc(f.label)} <span class="stbadge st-${esc(f.state)}">${esc(f.state)}</span>${ipInfo(f)}</div>
+        <div class="fr-row muttxt">보관된 위치: offset ${f.ip_off ?? "—"}${f.line ? " (소스 " + f.line + "줄)" : ""}</div>
+        ${frameBody(f)}</div>`).join("");
 
   // -- 인스턴스 (__dict__ · MRO) --
   const insts = s.instances ?? [];
@@ -239,6 +285,17 @@ function render() {
   $("pos").textContent = i + " / " + (t.steps.length - 1);
   $("prev").disabled = i === 0;
   $("next").disabled = i === t.steps.length - 1;
+
+  // 활성 소스 줄·바이트코드 줄을 각 스크롤 패널 '안에서만' 보이게 (페이지는 안 움직임)
+  centerInScroll("src", ".src-row.on");
+  centerInScroll("bc", ".bc-row.on");
+}
+
+function centerInScroll(containerId, sel) {
+  const c = $(containerId), el = c.querySelector(sel);
+  if (!el) return;
+  const target = el.offsetTop - c.clientHeight / 2 + el.clientHeight / 2;
+  c.scrollTop = Math.max(0, target);
 }
 $("next").onclick = () => { if (i < DATA[d].steps.length - 1) { i++; pinnedDoc = null; render(); } };
 $("prev").onclick = () => { if (i > 0) { i--; pinnedDoc = null; render(); } };

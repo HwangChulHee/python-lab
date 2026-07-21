@@ -282,19 +282,51 @@ class MiniPVM:
             self.sources[key] = {"first": 1, "lines": ["(소스를 찾을 수 없음)"]}
         self.code_attrs[key] = code_attr_snapshot(frame.func)
 
+    # ---------------------------------------------------------- localsplus 스냅샷
+    def _locals_plus(self, fr):
+        """프레임의 '실제 변수 전부'를 CPython localsplus 배치 그대로 스냅샷.
+
+        CPython의 프레임은 localsplus라는 한 배열에 [지역(fast) · 셀(cell) · 자유(free)]를
+        연달아 두고, 그 뒤로 값 스택을 쌓는다. 여기서도 그 순서대로 전부 낸다 —
+        아직 대입 안 된 지역 슬롯(미설정)과 셀로 옮겨간 슬롯까지 그대로 보인다."""
+        code = fr.code
+        argcount = code.co_argcount
+        fast = []
+        for idx, nm in enumerate(code.co_varnames):        # 지역(fast) 슬롯 — 미설정 포함
+            if nm in fr.local_vars:
+                fast.append({"name": nm, "val": fmt(fr.local_vars[nm]),
+                             "param": idx < argcount, "slot": "set"})
+            elif nm in fr.cells:                           # 셀 변수인 인자 → 슬롯은 셀을 가리킴
+                fast.append({"name": nm, "val": None, "param": idx < argcount, "slot": "cell"})
+            else:
+                fast.append({"name": nm, "val": None, "param": idx < argcount, "slot": "unset"})
+        cellvars = [{"name": nm, "val": fmt_cell(fr.cells[nm])}
+                    for nm in code.co_cellvars if nm in fr.cells]
+        freevars = [{"name": nm, "val": fmt_cell(fr.cells[nm])}
+                    for nm in code.co_freevars if nm in fr.cells]
+        cur = fr.instructions[fr.ip] if 0 <= fr.ip < len(fr.instructions) else None
+        return {
+            "fast": fast,
+            "cellvars": cellvars,
+            "freevars": freevars,
+            "stack": [fmt(v) for v in fr.value_stack],
+            # 클래스 본문 프레임이면 네임스페이스 dict도 실제 변수다 (지역이 아니라 이름 dict)
+            "namespace": ({k: fmt(v) for k, v in fr.namespace.items()}
+                          if fr.namespace is not None else None),
+            "ip_off": cur.offset if cur else None,
+            "ip_op": cur.opname if cur else None,
+            "line": (cur.positions.lineno if cur and cur.positions else None),
+        }
+
     # ---------------------------------------------------------- 스텝 기록 (스냅샷)
     def record(self, action, executed_index, ins):
         """현재 프레임 스택 전체 + 맨 위 함수 객체 속성을 한 스텝으로 스냅샷."""
         frames = []
         for i, fr in enumerate(self.frame_stack):
-            frames.append({
-                "name": fr.func_name,
-                "key": fr.listing_key,
-                "locals": {k: fmt(v) for k, v in fr.local_vars.items()},
-                "cells": {k: fmt_cell(c) for k, c in fr.cells.items()},
-                "stack": [fmt(v) for v in fr.value_stack],
-                "active": i == len(self.frame_stack) - 1,
-            })
+            snap = self._locals_plus(fr)
+            snap.update({"name": fr.func_name, "key": fr.listing_key,
+                         "active": i == len(self.frame_stack) - 1})
+            frames.append(snap)
         # 보관된 제너레이터 프레임(지금 스택에 없는 것) — '보관된 프레임' 패널용.
         # 프레임이 스택 ↔ 보관 패널을 오가는 것이 P3의 하이라이트 장면이다.
         on_stack = set(id(f) for f in self.frame_stack)
@@ -318,7 +350,7 @@ class MiniPVM:
         """만들어진 인스턴스들의 __dict__·MRO 스냅샷 + 직전 스텝과의 __dict__ diff."""
         out = []
         for obj in self.instances:
-            d = repr(obj.__dict__)
+            d = scrub_addr(repr(obj.__dict__))
             oid = id(obj)
             changed = oid in self._last_inst_snap and self._last_inst_snap[oid] != d
             self._last_inst_snap[oid] = d
@@ -332,18 +364,12 @@ class MiniPVM:
         return out
 
     def _held_snapshot(self, gen):
-        """보관된 제너레이터 프레임 하나를 스냅샷(상태·보관된 ip·값 스택 그대로)."""
+        """보관된 제너레이터 프레임 하나를 스냅샷 — 스택 프레임과 같은 localsplus 배치로."""
         fr = gen.frame
-        cur = fr.instructions[fr.ip] if fr.ip < len(fr.instructions) else None
-        return {
-            "label": gen.label, "name": fr.func_name, "key": fr.listing_key,
-            "state": gen.state,
-            "locals": {k: fmt(v) for k, v in fr.local_vars.items()},
-            "cells": {k: fmt_cell(c) for k, c in fr.cells.items()},
-            "stack": [fmt(v) for v in fr.value_stack],
-            "ip_off": cur.offset if cur else None,
-            "line": (cur.positions.lineno if cur and cur.positions else None),
-        }
+        snap = self._locals_plus(fr)
+        snap.update({"label": gen.label, "name": fr.func_name,
+                     "key": fr.listing_key, "state": gen.state})
+        return snap
 
     def _func_attrs_with_diff(self, func):
         """맨 위 프레임 함수 객체의 속성 스냅샷 + 직전 스냅샷과의 diff(changed 키)."""

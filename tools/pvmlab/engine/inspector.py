@@ -123,7 +123,7 @@ def build_func_attrs(values, changed_keys):
     """{이름:값} + 바뀐 키 집합 → 뷰어용 [{name, value, doc, changed}]"""
     order = ["__defaults__", "__kwdefaults__", "__closure__", "__dict__", "__globals__"]
     return [
-        {"name": n, "value": _short(values[n], 48),
+        {"name": n, "value": _short(scrub_addr(values[n]), 48),
          "doc": FUNC_ATTR_DOCS[n], "changed": n in changed_keys}
         for n in order
     ]
