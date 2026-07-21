@@ -106,3 +106,9 @@ def manual_style():
     sub = logger(sub)          # ← @logger 와 같은 일
 
     return sub(5, 3)           # 2
+
+@demo("8 u4 유제1")
+def mystery(a, b):
+    c = a * b
+    d = c + a
+    return d
