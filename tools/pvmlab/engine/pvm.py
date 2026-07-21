@@ -21,7 +21,7 @@ CPython ceval의 뼈대만 재현한다. 핵심 설계는 '프레임 스택 리�
 import inspect
 import textwrap
 
-from .frame import Frame, fmt, fmt_cell, reset_obj_labels, _obj_label
+from .frame import Frame, fmt, fmt_cell, reset_obj_labels, _obj_label, scrub_addr
 from .generator import MiniGenerator, gsend
 from .classes import BUILD_CLASS
 from .inspector import code_attr_snapshot, func_attr_values, build_func_attrs
@@ -270,7 +270,7 @@ class MiniPVM:
             return
         self.names[key] = frame.func_name      # 키는 co_qualname, 표시는 읽기 좋은 이름
         self.listings[key] = [
-            {"off": i.offset, "op": i.opname, "arg": i.argrepr,
+            {"off": i.offset, "op": i.opname, "arg": scrub_addr(i.argrepr),
              "line": i.positions.lineno if i.positions else None,
              "doc": OPCODE_DOCS.get(i.opname, "(설명 미등록 opcode)")}
             for i in frame.instructions]
@@ -303,7 +303,7 @@ class MiniPVM:
 
         top = self.frame_stack[-1] if self.frame_stack else None
         self.steps.append({
-            "action": action,
+            "action": scrub_addr(action),      # 스텝 설명에 박힌 주소도 제거 (결정적 HTML)
             "frames": frames,                  # 아래(먼저 쌓인 것) → 위 순서
             "held": held,                      # 보관된 제너레이터 프레임들
             "instances": self._instance_snapshots(),   # 만들어진 인스턴스들 (__dict__ diff)

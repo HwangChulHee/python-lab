@@ -15,7 +15,14 @@ Frame = 함수 호출 1번에 대응하는 작업 공간. CPython에서도 호�
 """
 
 import dis
+import re
 import types
+
+
+def scrub_addr(s):
+    """repr에 박히는 메모리 주소(' at 0x7f..')를 지운다. HTML을 결정적으로 만들고
+    (실행마다 주소가 달라 diff가 지저분해지는 것 방지) 화면도 깔끔해진다."""
+    return re.sub(r" at 0x[0-9a-fA-F]+", "", s)
 
 
 class Frame:
@@ -78,7 +85,7 @@ def _obj_label(v):
 
 
 def _short_repr(v):
-    r = repr(v)
+    r = scrub_addr(repr(v))
     return r if len(r) <= 34 else r[:31] + "..."
 
 

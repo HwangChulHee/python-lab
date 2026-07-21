@@ -14,6 +14,8 @@ diff의 검증 케이스가 데모 ⑤(가변 기본값 함정)다. 같은 함�
 
 import dis
 
+from .frame import scrub_addr
+
 
 # ------------------------------------------------------------------ 값 포맷
 def _short(text, limit=48):
@@ -70,7 +72,8 @@ def code_attr_snapshot(func):
         ("co_flags", ", ".join(_interpret_flags(code.co_flags))),
         ("co_firstlineno", str(code.co_firstlineno)),
     ]
-    return [{"name": n, "value": _short(v, 64), "doc": CODE_ATTR_DOCS[n]} for n, v in raw]
+    return [{"name": n, "value": _short(scrub_addr(v), 64), "doc": CODE_ATTR_DOCS[n]}
+            for n, v in raw]
 
 
 # ------------------------------------------------------------------ 함수 객체 (가변)
