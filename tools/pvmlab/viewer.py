@@ -62,19 +62,48 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .frtag { font-size:11px; color:var(--mut); font-weight:400; }
   .fr.act .frtag { color:var(--acc); }
   .ipinfo { font:11px ui-monospace,monospace; color:var(--mut); font-weight:400; float:right; }
-  .lp-line { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0; }
+  /* localsplus 배열 — 이름 슬롯 + 값 스택을 하나의 연속 배열로, 칸을 크게 */
+  .lp-arr { display:flex; flex-direction:column; gap:5px; margin-top:8px; }
+  .lp-slot { display:grid; grid-template-columns:28px 40px minmax(0,1fr) auto; gap:9px;
+             align-items:center; padding:7px 11px; border:1px solid var(--line);
+             border-radius:9px; background:var(--card);
+             font:13.5px/1.45 ui-monospace,Consolas,monospace; }
+  .lp-idx { color:var(--mut); font-size:11.5px; text-align:right; }
+  .lp-reg { font-size:11px; color:var(--mut); }
+  .lp-body { min-width:0; }
+  .lp-nm { font-weight:700; color:var(--txt); }
+  .lp-eq { color:var(--mut); }
+  .lp-val { color:var(--sub); overflow-wrap:anywhere; }
+  .lp-tags { white-space:nowrap; }
+  .lp-tagp { font-size:10.5px; color:#6a3ea0; background:#f5eefc; border-radius:5px; padding:0 6px; }
+  .lp-tagt { font-size:10.5px; color:var(--warn); font-weight:700; margin-left:4px; }
+  .lp-slot.reg-cell { border-color:#c9b8e6; background:#f7f3fc; }
+  .lp-slot.reg-cell .lp-reg { color:#6a4bb0; }
+  .lp-slot.reg-free { border-color:#a9cdb5; background:#f1f9f4; }
+  .lp-slot.reg-free .lp-reg { color:#2f7a4a; }
+  .lp-slot.reg-stack { border-color:#e6c98a; background:var(--warnbg); }
+  .lp-slot.reg-stack .lp-reg { color:var(--warn); }
+  .lp-slot.reg-stack .lp-val { color:var(--warn); font-weight:600; }
+  .lp-slot.param .lp-nm { color:#6a3ea0; }
+  .lp-slot.unset { opacity:.55; border-style:dashed; }
+  .lp-slot.cellref .lp-val { color:#6a4bb0; font-style:italic; }
+  .lp-slot.top { box-shadow:0 0 0 2px #e6c98a; }
+  .lp-slot.none { color:var(--mut); font-size:12px; justify-items:start; display:block;
+                  padding:4px 11px; border:none; background:none; }
+  .lp-div { font-size:11px; color:var(--warn); text-align:center; margin:5px 0 1px;
+            border-top:1px dashed #e6c98a; padding-top:6px; }
+  .lp-line { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:8px 0 2px; }
   .lp-tag { min-width:82px; font-size:11px; color:var(--mut); flex-shrink:0; }
-  .lpchip { padding:1px 8px; border-radius:6px; border:1px solid var(--line);
-            background:var(--card); font:12px ui-monospace,Consolas,monospace; color:var(--sub); }
-  .lpchip.param { border-color:#c9a9e6; background:#f5eefc; color:#6a3ea0; }
-  .lpchip.unset { color:var(--mut); border-style:dashed; background:none; }
-  .lpchip.cellref { color:#6a4bb0; border-style:dashed; background:none; }
-  .lpchip.cellv { border-color:#c9b8e6; background:#f4effb; color:#5a3ea0; }
-  .lpchip.freev { border-color:#a9cdb5; background:#eff8f2; color:#2f7a4a; }
+  .lpchip { padding:2px 9px; border-radius:6px; border:1px solid #bcd3f0;
+            background:var(--accbg); color:#1c4d94; font:12.5px ui-monospace,monospace; }
   .lpchip.nsv { border-color:#bcd3f0; background:var(--accbg); color:#1c4d94; }
-  .fr-legend { font-size:11px; color:var(--mut); margin-top:6px; }
-  .fr-legend .sw { display:inline-block; padding:0 6px; border-radius:5px; margin:0 2px;
-                   border:1px solid var(--line); }
+  .fr-legend { font-size:11px; color:var(--mut); margin-top:8px; line-height:1.9; }
+  .lg { display:inline-block; padding:0 7px; border-radius:5px; border:1px solid var(--line);
+        font-size:10.5px; }
+  .lg.reg-cell { border-color:#c9b8e6; background:#f7f3fc; color:#6a4bb0; }
+  .lg.reg-free { border-color:#a9cdb5; background:#f1f9f4; color:#2f7a4a; }
+  .lg.reg-stack { border-color:#e6c98a; background:var(--warnbg); color:var(--warn); }
+  .lg.param { color:#6a3ea0; background:#f5eefc; border-color:#c9a9e6; }
   .panel.held { border-color:#c9b8e6; background:#f7f3fc; }
   .panel.held h2 { color:#6a4bb0; }
   .heldfr { border-style:dashed; }
@@ -141,8 +170,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
   <div class="colR">
     <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중, 아래 = 호출한 프레임)</h2><div id="stk"></div>
-      <div class="fr-legend">한 프레임의 <b>localsplus</b> = 지역(fast) · 셀(cell) · 자유(free) 를 한 배열에 두고 그 뒤에 값 스택.
-        <span class="lpchip param">매개변수</span> <span class="lpchip cellv">셀</span> <span class="lpchip freev">자유</span> <span class="lpchip unset">미설정</span></div>
+      <div class="fr-legend">3.11+ 프레임은 <b>localsplus</b> 한 배열에 [지역(fast)·셀·자유]를 이어 두고 <b>값 스택도 같은 배열의 뒤쪽</b>에서 자란다. 왼쪽 숫자가 그 배열 인덱스.
+        <br>구역: <span class="lg reg-local">지역</span> <span class="lg reg-cell">셀</span> <span class="lg reg-free">자유</span> <span class="lg reg-stack">값 스택</span> · <span class="lg param">보라 이름</span>=매개변수 · 점선=미설정 · ◀ TOP=스택 맨 위</div>
     </div>
     <div class="panel held" id="heldpanel" style="display:none"><h2>보관된 프레임 · 제너레이터 (소멸 아님, ip·값 스택 보존)</h2><div id="held"></div></div>
     <div class="panel inst" id="instpanel" style="display:none"><h2>인스턴스 · __dict__와 type().__mro__ (STORE_ATTR 시 diff 강조)</h2><div id="inst"></div></div>
@@ -183,30 +212,47 @@ function attrRow(a) {
     `<div class="attr-doc">${esc(a.doc)}</div></div>`;
 }
 
-// localsplus 한 줄(라벨 + 칩들) 렌더
-function lpLine(tag, chipsHtml) {
-  return `<div class="lp-line"><span class="lp-tag">${tag}</span>${chipsHtml || '<span class="muttxt">—</span>'}</div>`;
+// localsplus 슬롯 하나를 큰 칸으로 렌더 (인덱스 · 구역 · 이름 = 값 · 태그)
+const REGION_LABEL = {local: "지역", cell: "셀", free: "자유", stack: "스택"};
+function slotBox(s) {
+  const cls = ["lp-slot", "reg-" + s.region];
+  if (s.param) cls.push("param");
+  if (s.slot === "unset") cls.push("unset");
+  if (s.slot === "cell") cls.push("cellref");
+  if (s.top) cls.push("top");
+  let name, val;
+  if (s.region === "stack") { name = `[${s.idx}]`; val = esc(s.val); }
+  else {
+    name = esc(s.name);
+    val = s.slot === "unset" ? "(미설정)" : (s.slot === "cell" ? "→ 셀 슬롯" : esc(s.val));
+  }
+  const tags = (s.param ? '<span class="lp-tagp">param</span>' : "")
+             + (s.top ? '<span class="lp-tagt">◀ TOP</span>' : "");
+  return `<div class="${cls.join(" ")}">
+      <span class="lp-idx">${s.idx}</span>
+      <span class="lp-reg">${REGION_LABEL[s.region]}</span>
+      <span class="lp-body"><span class="lp-nm">${name}</span>${s.region === "stack" ? "" : ' <span class="lp-eq">=</span> '}<span class="lp-val">${val}</span></span>
+      <span class="lp-tags">${tags}</span>
+    </div>`;
 }
 
-// 프레임 하나의 '실제 변수 전부'를 localsplus 순서(지역·셀·자유·[네임스페이스]·값 스택)로
+// 프레임 하나의 localsplus 배열 전체 (이름 슬롯 + 값 스택을 하나의 연속 배열로)
 function frameBody(f) {
-  let h = "";
-  // 지역(fast) — 미설정 슬롯·셀로 옮겨간 슬롯까지 그대로
-  const fast = (f.fast || []).map(v => {
-    if (v.slot === "unset") return `<span class="lpchip unset">${esc(v.name)} = (미설정)</span>`;
-    if (v.slot === "cell")  return `<span class="lpchip cellref">${esc(v.name)} → 셀 슬롯</span>`;
-    return `<span class="lpchip ${v.param ? "param" : ""}">${esc(v.name)} = ${esc(v.val)}</span>`;
-  }).join("");
-  h += lpLine("지역(fast)", fast);
-  if (f.cellvars && f.cellvars.length)
-    h += lpLine("셀(cell)", f.cellvars.map(v => `<span class="lpchip cellv">${esc(v.name)} ▸ ${esc(v.val)}</span>`).join(""));
-  if (f.freevars && f.freevars.length)
-    h += lpLine("자유(free)", f.freevars.map(v => `<span class="lpchip freev">${esc(v.name)} ▸ ${esc(v.val)}</span>`).join(""));
-  if (f.namespace)   // 클래스 본문 프레임 — 네임스페이스 dict가 실제 변수
-    h += lpLine("네임스페이스", Object.entries(f.namespace).map(([k,v]) => `<span class="lpchip nsv">${esc(k)} = ${esc(v)}</span>`).join(""));
-  h += lpLine("값 스택", (f.stack && f.stack.length)
-      ? f.stack.map(v => `<span class="cell">${esc(v)}</span>`).join("")
-      : '<span class="cell empty">비어 있음</span>');
+  const plus = f.plus || [];
+  const named = plus.filter(s => s.region !== "stack");
+  const stack = plus.filter(s => s.region === "stack");
+  let h = '<div class="lp-arr">';
+  h += named.length ? named.map(slotBox).join("")
+                    : '<div class="lp-slot none">이름 슬롯 없음</div>';
+  h += `<div class="lp-div">↓ 값 스택 — 같은 localsplus 배열의 뒤쪽(index ${f.nlocalsplus}부터, 최대 ${f.stacksize}칸)에서 자란다</div>`;
+  h += stack.length ? stack.map(slotBox).join("")
+                    : '<div class="lp-slot none">값 스택 비어 있음</div>';
+  h += '</div>';
+  if (f.namespace) {   // 클래스 본문 프레임 — 네임스페이스 dict는 localsplus가 아니라 별도 이름 공간
+    const ns = Object.entries(f.namespace).map(([k,v]) =>
+      `<span class="lpchip nsv">${esc(k)} = ${esc(v)}</span>`).join("");
+    h += `<div class="lp-line"><span class="lp-tag">네임스페이스</span>${ns || '<span class="muttxt">—</span>'}</div>`;
+  }
   return h;
 }
 

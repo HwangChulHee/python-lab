@@ -284,32 +284,53 @@ class MiniPVM:
 
     # ---------------------------------------------------------- localsplus 스냅샷
     def _locals_plus(self, fr):
-        """프레임의 '실제 변수 전부'를 CPython localsplus 배치 그대로 스냅샷.
+        """프레임의 '실제 변수 전부'를 CPython 3.11+ localsplus 배치 그대로 스냅샷.
 
-        CPython의 프레임은 localsplus라는 한 배열에 [지역(fast) · 셀(cell) · 자유(free)]를
-        연달아 두고, 그 뒤로 값 스택을 쌓는다. 여기서도 그 순서대로 전부 낸다 —
-        아직 대입 안 된 지역 슬롯(미설정)과 셀로 옮겨간 슬롯까지 그대로 보인다."""
+        3.11+에서 프레임은 지역·셀·자유·값 스택을 '따로' 두지 않는다. localsplus라는
+        하나의 연속 배열에
+
+            [ 지역(fast, co_nlocals개) · 셀(co_cellvars) · 자유(co_freevars) ]  ← 이름 있는 슬롯
+            [ 값 스택 (co_stacksize칸) ]                                       ← 같은 배열의 뒤쪽
+
+        를 이어 붙여 두고, 스택 포인터가 그 뒤쪽에서 오르내린다. 그래서 여기선 전부를
+        인덱스가 매겨진 하나의 배열 `plus`로 낸다. `nlocalsplus`가 이름 슬롯과 값 스택의
+        경계 인덱스다. (미설정 슬롯·셀로 옮겨간 지역 슬롯까지 그대로 보인다.)"""
         code = fr.code
         argcount = code.co_argcount
-        fast = []
-        for idx, nm in enumerate(code.co_varnames):        # 지역(fast) 슬롯 — 미설정 포함
+        plus = []
+        i = 0
+        for k, nm in enumerate(code.co_varnames):          # 지역(fast)
             if nm in fr.local_vars:
-                fast.append({"name": nm, "val": fmt(fr.local_vars[nm]),
-                             "param": idx < argcount, "slot": "set"})
+                val, slot = fmt(fr.local_vars[nm]), "set"
             elif nm in fr.cells:                           # 셀 변수인 인자 → 슬롯은 셀을 가리킴
-                fast.append({"name": nm, "val": None, "param": idx < argcount, "slot": "cell"})
+                val, slot = None, "cell"
             else:
-                fast.append({"name": nm, "val": None, "param": idx < argcount, "slot": "unset"})
-        cellvars = [{"name": nm, "val": fmt_cell(fr.cells[nm])}
-                    for nm in code.co_cellvars if nm in fr.cells]
-        freevars = [{"name": nm, "val": fmt_cell(fr.cells[nm])}
-                    for nm in code.co_freevars if nm in fr.cells]
+                val, slot = None, "unset"
+            plus.append({"idx": i, "region": "local", "name": nm,
+                         "param": k < argcount, "val": val, "slot": slot})
+            i += 1
+        for nm in code.co_cellvars:                        # 셀
+            has = nm in fr.cells
+            plus.append({"idx": i, "region": "cell", "name": nm,
+                         "val": fmt_cell(fr.cells[nm]) if has else None,
+                         "slot": "set" if has else "unset"})
+            i += 1
+        for nm in code.co_freevars:                        # 자유
+            has = nm in fr.cells
+            plus.append({"idx": i, "region": "free", "name": nm,
+                         "val": fmt_cell(fr.cells[nm]) if has else None,
+                         "slot": "set" if has else "unset"})
+            i += 1
+        nlocalsplus = i                                    # 이름 슬롯 / 값 스택 경계
+        for j, v in enumerate(fr.value_stack):             # 값 스택 (같은 배열의 뒤쪽)
+            plus.append({"idx": i + j, "region": "stack", "name": None,
+                         "val": fmt(v), "slot": "set",
+                         "top": j == len(fr.value_stack) - 1})
         cur = fr.instructions[fr.ip] if 0 <= fr.ip < len(fr.instructions) else None
         return {
-            "fast": fast,
-            "cellvars": cellvars,
-            "freevars": freevars,
-            "stack": [fmt(v) for v in fr.value_stack],
+            "plus": plus,
+            "nlocalsplus": nlocalsplus,
+            "stacksize": code.co_stacksize,
             # 클래스 본문 프레임이면 네임스페이스 dict도 실제 변수다 (지역이 아니라 이름 dict)
             "namespace": ({k: fmt(v) for k, v in fr.namespace.items()}
                           if fr.namespace is not None else None),
