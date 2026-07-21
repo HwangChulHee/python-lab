@@ -44,6 +44,7 @@ class MiniPVM:
         self._last_func_snap = {}              # {id(func): {속성:값}} — diff 계산용
         self._last_inst_snap = {}              # {id(inst): __dict__ 문자열} — diff 계산용
         self._last_stack = {}                  # {id(frame): [값 스택 문자열]} — push/pop 계산용
+        self._last_named = {}                  # {id(frame): {(region,name): 값}} — 셀/지역 쓰기 감지용
         reset_obj_labels()                     # <objN> 라벨을 트레이스마다 초기화
 
     # ---------------------------------------------------------- 진입점: CALL의 최초 형태
@@ -365,6 +366,22 @@ class MiniPVM:
         snap["delta"] = 0 if prev is None else (len(cur) - len(prev))
         self._last_stack[id(fr)] = cur
 
+    def _annotate_named_writes(self, snap, fr):
+        """이름 슬롯(지역·셀·자유) 중 이번 스텝에 값이 바뀐 것에 written 표시.
+
+        셀/자유의 값 변경 = STORE_DEREF(셀에 쓰기)·MAKE_CELL·COPY_FREE_VARS 같은 '쓰기'
+        방향 사건이다. 값 스택의 push/pop에 대응하는, 셀 쪽의 방향 표시."""
+        prev = self._last_named.get(id(fr), {})
+        cur = {}
+        for p in snap["plus"]:
+            if p["region"] in ("local", "cell", "free"):
+                key = (p["region"], p["name"])
+                v = p.get("val")
+                cur[key] = v
+                if key in prev and prev[key] != v and v is not None:
+                    p["written"] = True
+        self._last_named[id(fr)] = cur
+
     # ---------------------------------------------------------- 스텝 기록 (스냅샷)
     def record(self, action, executed_index, ins):
         """현재 프레임 스택 전체 + 맨 위 함수 객체 속성을 한 스텝으로 스냅샷."""
@@ -375,10 +392,11 @@ class MiniPVM:
                          "active": i == len(self.frame_stack) - 1})
             frames.append(snap)
 
-        # 맨 위(활성) 프레임의 값 스택이 직전 스텝 대비 어떻게 변했는지 — push/pop·스택효과.
-        # 프레임 정체성(id)으로 그 프레임의 직전 스택과 비교한다(호출/반환을 넘어 정확).
+        # 맨 위(활성) 프레임의 값 스택·이름 슬롯이 직전 스텝 대비 어떻게 변했는지.
+        # 프레임 정체성(id)으로 그 프레임의 직전 상태와 비교한다(호출/반환을 넘어 정확).
         if self.frame_stack:
             self._annotate_stack_delta(frames[-1], self.frame_stack[-1])
+            self._annotate_named_writes(frames[-1], self.frame_stack[-1])
         # 보관된 제너레이터 프레임(지금 스택에 없는 것) — '보관된 프레임' 패널용.
         # 프레임이 스택 ↔ 보관 패널을 오가는 것이 P3의 하이라이트 장면이다.
         on_stack = set(id(f) for f in self.frame_stack)

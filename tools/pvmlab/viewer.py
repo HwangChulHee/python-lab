@@ -79,7 +79,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .lp-tagt { font-size:10.5px; color:var(--warn); font-weight:700; margin-left:4px; }
   .lp-push { font-size:10.5px; color:#2f8f4e; background:#e6f4ec; border-radius:5px;
              padding:0 6px; font-weight:700; }
+  .lp-store { font-size:10.5px; color:#b06a00; background:#fbf0dd; border-radius:5px;
+              padding:0 6px; font-weight:700; }
   .lp-slot.pushed { border-color:#7ec99a; box-shadow:inset 3px 0 0 #2f8f4e; }
+  .lp-slot.written { box-shadow:inset 3px 0 0 #d99500; }
   .lp-slot.reg-cell { border-color:#c9b8e6; background:#f7f3fc; }
   .lp-slot.reg-cell .lp-reg { color:#6a4bb0; }
   .lp-slot.reg-free { border-color:#a9cdb5; background:#f1f9f4; }
@@ -94,8 +97,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .lp-slot.top { box-shadow:0 0 0 2px #e6c98a; }
   .lp-slot.none { color:var(--mut); font-size:12px; justify-items:start; display:block;
                   padding:4px 11px; border:none; background:none; }
-  .lp-div { font-size:11px; color:var(--warn); text-align:center; margin:5px 0 1px;
-            border-top:1px dashed #e6c98a; padding-top:6px; }
+  .lp-div { font-size:11px; text-align:left; margin:8px 0 3px; padding:4px 9px;
+            border-radius:6px; font-weight:600; }
+  .lp-div-local { color:var(--sub); background:#f1f0ea; }
+  .lp-div-cell { color:#6a4bb0; background:#f2ecfb; }
+  .lp-div-free { color:#2f7a4a; background:#ecf6f0; }
+  .lp-div-stack { color:var(--warn); background:var(--warnbg); font-weight:400; }
   .lp-line { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:8px 0 2px; }
   .lp-tag { min-width:82px; font-size:11px; color:var(--mut); flex-shrink:0; }
   .lpchip { padding:2px 9px; border-radius:6px; border:1px solid #bcd3f0;
@@ -109,6 +116,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .lg.reg-stack { border-color:#e6c98a; background:var(--warnbg); color:var(--warn); }
   .lg.param { color:#6a3ea0; background:#f5eefc; border-color:#c9a9e6; }
   .lg.push { color:#2f8f4e; background:#e6f4ec; border-color:#7ec99a; }
+  .lg.store { color:#b06a00; background:#fbf0dd; border-color:#e6c98a; }
   .panel.held { border-color:#c9b8e6; background:#f7f3fc; }
   .panel.held h2 { color:#6a4bb0; }
   .heldfr { border-style:dashed; }
@@ -175,8 +183,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
   <div class="colR">
     <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중, 아래 = 호출한 프레임)</h2><div id="stk"></div>
-      <div class="fr-legend">3.11+ 프레임은 <b>localsplus</b> 한 배열에 [지역(fast)·셀·자유]를 이어 두고 <b>값 스택도 같은 배열의 뒤쪽</b>에서 자란다. 왼쪽 숫자가 그 배열 인덱스.
-        <br>구역: <span class="lg reg-local">지역</span> <span class="lg reg-cell">셀</span> <span class="lg reg-free">자유</span> <span class="lg reg-stack">값 스택</span> · <span class="lg param">보라 이름</span>=매개변수 · 점선=미설정 · ◀ TOP=스택 맨 위 · <span class="lg push">↑ push</span>=이번 스텝에 올라온 값(구분선에 pop/push·스택효과)</div>
+      <div class="fr-legend">3.11+ 프레임은 <b>localsplus</b> 한 배열에 [지역(fast)·셀·자유]를 이어 두고 <b>값 스택도 같은 배열의 뒤쪽</b>에서 자란다. 왼쪽 숫자가 그 배열 인덱스. 셀·자유는 <b>따로 할당된 칸</b>(구역 머리글로 구분).
+        <br>구역: <span class="lg reg-local">지역</span> <span class="lg reg-cell">셀</span> <span class="lg reg-free">자유</span> <span class="lg reg-stack">값 스택</span> · <span class="lg param">보라 이름</span>=매개변수 · 점선=미설정 · ◀ TOP=스택 맨 위
+        <br>방향: <span class="lg push">↑ push</span>=스택에 올라옴 · <span class="lg store">↓ store</span>=셀/자유에 씀(STORE_DEREF 등) · <span class="lg store">✎ store</span>=지역에 씀 · (스택 구분선에 pop/push·스택효과)</div>
     </div>
     <div class="panel held" id="heldpanel" style="display:none"><h2>보관된 프레임 · 제너레이터 (소멸 아님, ip·값 스택 보존)</h2><div id="held"></div></div>
     <div class="panel inst" id="instpanel" style="display:none"><h2>인스턴스 · __dict__와 type().__mro__ (STORE_ATTR 시 diff 강조)</h2><div id="inst"></div></div>
@@ -226,13 +235,18 @@ function slotBox(s) {
   if (s.slot === "cell") cls.push("cellref");
   if (s.top) cls.push("top");
   if (s.pushed) cls.push("pushed");
+  if (s.written) cls.push("written");
   let name, val;
   if (s.region === "stack") { name = `[${s.idx}]`; val = esc(s.val); }
   else if (s.slot === "unset") { name = esc(s.name); val = "(미설정)"; }
   else if (s.slot === "cell") { name = esc(s.name); val = esc(s.val) + ' <span class="cellref-mark">↗ 셀에 보관</span>'; }
   else { name = esc(s.name); val = esc(s.val); }
+  const store = s.written ? (s.region === "stack" ? "" :
+                  (s.region === "local" ? '<span class="lp-store">✎ store</span>'
+                                        : '<span class="lp-store">↓ store</span>')) : "";
   const tags = (s.param ? '<span class="lp-tagp">param</span>' : "")
              + (s.pushed ? '<span class="lp-push">↑ push</span>' : "")
+             + store
              + (s.top ? '<span class="lp-tagt">◀ TOP</span>' : "");
   return `<div class="${cls.join(" ")}">
       <span class="lp-idx">${s.idx}</span>
@@ -253,17 +267,24 @@ function stackEffect(f) {
   return ` · 이번 스텝: <b>${parts.join(" → ")}</b> (스택효과 ${sign}${d})`;
 }
 
-// 프레임 하나의 localsplus 배열 전체 (이름 슬롯 + 값 스택을 하나의 연속 배열로)
+// 프레임 하나의 localsplus 배열 — 구역별로 '따로 할당된 공간'임이 보이게 나눠서 렌더
 function frameBody(f) {
   const plus = f.plus || [];
-  const named = plus.filter(s => s.region !== "stack");
-  const stack = plus.filter(s => s.region === "stack");
+  const by = r => plus.filter(s => s.region === r);
+  const L = by("local"), C = by("cell"), Fr = by("free"), S = by("stack");
   let h = '<div class="lp-arr">';
-  h += named.length ? named.map(slotBox).join("")
-                    : '<div class="lp-slot none">이름 슬롯 없음</div>';
-  h += `<div class="lp-div">↓ 값 스택 · index ${f.nlocalsplus}부터(최대 ${f.stacksize}칸)${stackEffect(f)}</div>`;
-  h += stack.length ? stack.map(slotBox).join("")
-                    : '<div class="lp-slot none">값 스택 비어 있음</div>';
+  h += `<div class="lp-div lp-div-local">지역(fast) · ${L.length}칸</div>`;
+  h += L.length ? L.map(slotBox).join("") : '<div class="lp-slot none">없음</div>';
+  if (C.length) {
+    h += `<div class="lp-div lp-div-cell">셀(cell) · 따로 할당된 ${C.length}칸 — 바깥이 참조하는 상자</div>`;
+    h += C.map(slotBox).join("");
+  }
+  if (Fr.length) {
+    h += `<div class="lp-div lp-div-free">자유(free) · 따로 할당된 ${Fr.length}칸 — 바깥 셀을 가져옴</div>`;
+    h += Fr.map(slotBox).join("");
+  }
+  h += `<div class="lp-div lp-div-stack">값 스택 · index ${f.nlocalsplus}부터(최대 ${f.stacksize}칸)${stackEffect(f)}</div>`;
+  h += S.length ? S.map(slotBox).join("") : '<div class="lp-slot none">비어 있음</div>';
   h += '</div>';
   if (f.namespace) {   // 클래스 본문 프레임 — 네임스페이스 dict는 localsplus가 아니라 별도 이름 공간
     const ns = Object.entries(f.namespace).map(([k,v]) =>
