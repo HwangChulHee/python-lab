@@ -89,7 +89,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .lp-slot.reg-stack .lp-val { color:var(--warn); font-weight:600; }
   .lp-slot.param .lp-nm { color:#6a3ea0; }
   .lp-slot.unset { opacity:.55; border-style:dashed; }
-  .lp-slot.cellref .lp-val { color:#6a4bb0; font-style:italic; }
+  .lp-slot.cellref .lp-val { color:#6a4bb0; }
+  .cellref-mark { font-size:10px; color:#6a4bb0; background:#f0e9fb; border-radius:5px; padding:0 5px; }
   .lp-slot.top { box-shadow:0 0 0 2px #e6c98a; }
   .lp-slot.none { color:var(--mut); font-size:12px; justify-items:start; display:block;
                   padding:4px 11px; border:none; background:none; }
@@ -227,10 +228,9 @@ function slotBox(s) {
   if (s.pushed) cls.push("pushed");
   let name, val;
   if (s.region === "stack") { name = `[${s.idx}]`; val = esc(s.val); }
-  else {
-    name = esc(s.name);
-    val = s.slot === "unset" ? "(미설정)" : (s.slot === "cell" ? "→ 셀 슬롯" : esc(s.val));
-  }
+  else if (s.slot === "unset") { name = esc(s.name); val = "(미설정)"; }
+  else if (s.slot === "cell") { name = esc(s.name); val = esc(s.val) + ' <span class="cellref-mark">↗ 셀에 보관</span>'; }
+  else { name = esc(s.name); val = esc(s.val); }
   const tags = (s.param ? '<span class="lp-tagp">param</span>' : "")
              + (s.pushed ? '<span class="lp-push">↑ push</span>' : "")
              + (s.top ? '<span class="lp-tagt">◀ TOP</span>' : "");

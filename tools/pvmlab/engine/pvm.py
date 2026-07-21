@@ -303,8 +303,8 @@ class MiniPVM:
         for k, nm in enumerate(code.co_varnames):          # 지역(fast)
             if nm in fr.local_vars:
                 val, slot = fmt(fr.local_vars[nm]), "set"
-            elif nm in fr.cells:                           # 셀 변수인 인자 → 슬롯은 셀을 가리킴
-                val, slot = None, "cell"
+            elif nm in fr.cells:                           # 셀 변수인 인자 → 값은 셀에 있다(같이 표시)
+                val, slot = fmt_cell(fr.cells[nm]), "cell"
             else:
                 val, slot = None, "unset"
             plus.append({"idx": i, "region": "local", "name": nm,
