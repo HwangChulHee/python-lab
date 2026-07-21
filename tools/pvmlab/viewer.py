@@ -33,7 +33,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
            border-radius:8px; background:var(--card); margin-bottom:16px; }
   /* 우측 열은 고정 폭(440px) — 코드가 길든 넓든 절대 쪼그라들지 않는다.
      좌측 코드 열은 minmax(0,1fr)이라 남는 폭만 차지하고, 줄이 넓으면 좌우로 스크롤된다. */
-  .cols { display:grid; grid-template-columns:minmax(0,1fr) 440px; gap:14px; align-items:start; }
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 560px; gap:14px; align-items:start; }
   .colL { position:sticky; top:14px; min-width:0; }   /* 코드 열: 위에 고정 + 폭 줄어들 수 있게 */
   .colR { min-width:0; }
   .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
@@ -77,6 +77,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .lp-tags { white-space:nowrap; }
   .lp-tagp { font-size:10.5px; color:#6a3ea0; background:#f5eefc; border-radius:5px; padding:0 6px; }
   .lp-tagt { font-size:10.5px; color:var(--warn); font-weight:700; margin-left:4px; }
+  .lp-push { font-size:10.5px; color:#2f8f4e; background:#e6f4ec; border-radius:5px;
+             padding:0 6px; font-weight:700; }
+  .lp-slot.pushed { border-color:#7ec99a; box-shadow:inset 3px 0 0 #2f8f4e; }
   .lp-slot.reg-cell { border-color:#c9b8e6; background:#f7f3fc; }
   .lp-slot.reg-cell .lp-reg { color:#6a4bb0; }
   .lp-slot.reg-free { border-color:#a9cdb5; background:#f1f9f4; }
@@ -104,6 +107,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .lg.reg-free { border-color:#a9cdb5; background:#f1f9f4; color:#2f7a4a; }
   .lg.reg-stack { border-color:#e6c98a; background:var(--warnbg); color:var(--warn); }
   .lg.param { color:#6a3ea0; background:#f5eefc; border-color:#c9a9e6; }
+  .lg.push { color:#2f8f4e; background:#e6f4ec; border-color:#7ec99a; }
   .panel.held { border-color:#c9b8e6; background:#f7f3fc; }
   .panel.held h2 { color:#6a4bb0; }
   .heldfr { border-style:dashed; }
@@ -171,7 +175,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="colR">
     <div class="panel"><h2>프레임 스택 · 호출마다 1개 (맨 위 = 실행 중, 아래 = 호출한 프레임)</h2><div id="stk"></div>
       <div class="fr-legend">3.11+ 프레임은 <b>localsplus</b> 한 배열에 [지역(fast)·셀·자유]를 이어 두고 <b>값 스택도 같은 배열의 뒤쪽</b>에서 자란다. 왼쪽 숫자가 그 배열 인덱스.
-        <br>구역: <span class="lg reg-local">지역</span> <span class="lg reg-cell">셀</span> <span class="lg reg-free">자유</span> <span class="lg reg-stack">값 스택</span> · <span class="lg param">보라 이름</span>=매개변수 · 점선=미설정 · ◀ TOP=스택 맨 위</div>
+        <br>구역: <span class="lg reg-local">지역</span> <span class="lg reg-cell">셀</span> <span class="lg reg-free">자유</span> <span class="lg reg-stack">값 스택</span> · <span class="lg param">보라 이름</span>=매개변수 · 점선=미설정 · ◀ TOP=스택 맨 위 · <span class="lg push">↑ push</span>=이번 스텝에 올라온 값(구분선에 pop/push·스택효과)</div>
     </div>
     <div class="panel held" id="heldpanel" style="display:none"><h2>보관된 프레임 · 제너레이터 (소멸 아님, ip·값 스택 보존)</h2><div id="held"></div></div>
     <div class="panel inst" id="instpanel" style="display:none"><h2>인스턴스 · __dict__와 type().__mro__ (STORE_ATTR 시 diff 강조)</h2><div id="inst"></div></div>
@@ -220,6 +224,7 @@ function slotBox(s) {
   if (s.slot === "unset") cls.push("unset");
   if (s.slot === "cell") cls.push("cellref");
   if (s.top) cls.push("top");
+  if (s.pushed) cls.push("pushed");
   let name, val;
   if (s.region === "stack") { name = `[${s.idx}]`; val = esc(s.val); }
   else {
@@ -227,6 +232,7 @@ function slotBox(s) {
     val = s.slot === "unset" ? "(미설정)" : (s.slot === "cell" ? "→ 셀 슬롯" : esc(s.val));
   }
   const tags = (s.param ? '<span class="lp-tagp">param</span>' : "")
+             + (s.pushed ? '<span class="lp-push">↑ push</span>' : "")
              + (s.top ? '<span class="lp-tagt">◀ TOP</span>' : "");
   return `<div class="${cls.join(" ")}">
       <span class="lp-idx">${s.idx}</span>
@@ -234,6 +240,17 @@ function slotBox(s) {
       <span class="lp-body"><span class="lp-nm">${name}</span>${s.region === "stack" ? "" : ' <span class="lp-eq">=</span> '}<span class="lp-val">${val}</span></span>
       <span class="lp-tags">${tags}</span>
     </div>`;
+}
+
+// 이번 스텝의 스택효과 문자열 (활성 프레임에만 delta/pushed/popped가 있다)
+function stackEffect(f) {
+  if (f.delta === undefined || f.delta === null) return "";
+  const parts = [];
+  if (f.popped) parts.push(`${f.popped} pop`);
+  if (f.pushed) parts.push(`${f.pushed} push`);
+  if (!parts.length) return ' · 이번 스텝 스택 변화 없음';
+  const d = f.delta, sign = d > 0 ? "+" : "";
+  return ` · 이번 스텝: <b>${parts.join(" → ")}</b> (스택효과 ${sign}${d})`;
 }
 
 // 프레임 하나의 localsplus 배열 전체 (이름 슬롯 + 값 스택을 하나의 연속 배열로)
@@ -244,7 +261,7 @@ function frameBody(f) {
   let h = '<div class="lp-arr">';
   h += named.length ? named.map(slotBox).join("")
                     : '<div class="lp-slot none">이름 슬롯 없음</div>';
-  h += `<div class="lp-div">↓ 값 스택 — 같은 localsplus 배열의 뒤쪽(index ${f.nlocalsplus}부터, 최대 ${f.stacksize}칸)에서 자란다</div>`;
+  h += `<div class="lp-div">↓ 값 스택 · index ${f.nlocalsplus}부터(최대 ${f.stacksize}칸)${stackEffect(f)}</div>`;
   h += stack.length ? stack.map(slotBox).join("")
                     : '<div class="lp-slot none">값 스택 비어 있음</div>';
   h += '</div>';

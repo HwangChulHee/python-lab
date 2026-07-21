@@ -43,6 +43,7 @@ class MiniPVM:
         self.instances = []                    # 만들어진 인스턴스들 (인스턴스 패널 + __dict__ diff)
         self._last_func_snap = {}              # {id(func): {속성:값}} — diff 계산용
         self._last_inst_snap = {}              # {id(inst): __dict__ 문자열} — diff 계산용
+        self._last_stack = {}                  # {id(frame): [값 스택 문자열]} — push/pop 계산용
         reset_obj_labels()                     # <objN> 라벨을 트레이스마다 초기화
 
     # ---------------------------------------------------------- 진입점: CALL의 최초 형태
@@ -339,6 +340,31 @@ class MiniPVM:
             "line": (cur.positions.lineno if cur and cur.positions else None),
         }
 
+    def _annotate_stack_delta(self, snap, fr):
+        """활성 프레임의 값 스택을 직전 스텝과 비교해 push/pop·순효과를 달아 준다.
+
+        공통 접두(바뀌지 않은 아래쪽)를 찾아, 그 위로 사라진 만큼이 pop, 새로 생긴
+        만큼이 push다. 새로 올라온 스택 슬롯에는 pushed 표시를 단다."""
+        cur = [p["val"] for p in snap["plus"] if p["region"] == "stack"]
+        prev = self._last_stack.get(id(fr))
+        if prev is None:                       # 이 프레임 첫 등장 → 비교 대상 없음
+            pushed_from, popped = len(cur), 0
+        else:
+            c = 0
+            while c < len(prev) and c < len(cur) and prev[c] == cur[c]:
+                c += 1
+            pushed_from, popped = c, len(prev) - c
+        pushed = len(cur) - pushed_from
+        si = 0
+        for p in snap["plus"]:                 # 새로 올라온 스택 슬롯 표시
+            if p["region"] == "stack":
+                p["pushed"] = si >= pushed_from
+                si += 1
+        snap["pushed"] = pushed
+        snap["popped"] = popped
+        snap["delta"] = 0 if prev is None else (len(cur) - len(prev))
+        self._last_stack[id(fr)] = cur
+
     # ---------------------------------------------------------- 스텝 기록 (스냅샷)
     def record(self, action, executed_index, ins):
         """현재 프레임 스택 전체 + 맨 위 함수 객체 속성을 한 스텝으로 스냅샷."""
@@ -348,6 +374,11 @@ class MiniPVM:
             snap.update({"name": fr.func_name, "key": fr.listing_key,
                          "active": i == len(self.frame_stack) - 1})
             frames.append(snap)
+
+        # 맨 위(활성) 프레임의 값 스택이 직전 스텝 대비 어떻게 변했는지 — push/pop·스택효과.
+        # 프레임 정체성(id)으로 그 프레임의 직전 스택과 비교한다(호출/반환을 넘어 정확).
+        if self.frame_stack:
+            self._annotate_stack_delta(frames[-1], self.frame_stack[-1])
         # 보관된 제너레이터 프레임(지금 스택에 없는 것) — '보관된 프레임' 패널용.
         # 프레임이 스택 ↔ 보관 패널을 오가는 것이 P3의 하이라이트 장면이다.
         on_stack = set(id(f) for f in self.frame_stack)
