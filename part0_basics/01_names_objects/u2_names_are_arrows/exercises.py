@@ -9,7 +9,7 @@
 a = [1, 2, 3]
 b = a
 b = b + [4]           # ← 이건 재대입일까 변경일까?
-# 예측: a =        b =
+# 예측: a = [1,2,3]       b = [1,2,3,4] / 4를 더해서 새로운 리스트를 만드라는거 아닐까 싶은데
 print("A) a =", a, "| b =", b)
 # 왜? (b + [4]가 무엇을 만드는지):
 #   →
@@ -18,7 +18,7 @@ print("A) a =", a, "| b =", b)
 a = [1, 2, 3]
 b = a
 b += [4]              # ← += 는?  (A의 b = b + [4]와 같을까 다를까)
-# 예측: a =        b =
+# 예측: a =  [1, 2, 3,4]      b = [1, 2, 3,4] / 뭔가... 이거라서 낸거 아닐까싶은데
 print("B) a =", a, "| b =", b)
 # A와 B의 결과가 다르다면 왜? (힌트: += 는 리스트에서 extend를 부른다):
 #   →
@@ -27,10 +27,10 @@ print("B) a =", a, "| b =", b)
 x = [1, 2]
 y = x
 x = [3, 4]
-# 예측: y =
+# 예측: y = [1,2]. 이지
 print("C) y =", y)
 # x를 재대입했는데 y가 영향을 받나? 화살표로 설명:
-#   →
+#   → 
 
 
 # ═══════════════════════════════════════════════════
@@ -43,7 +43,7 @@ def modify(lst):
 
 original = [1, 2, 3]
 modify(original)
-# 예측: original =
+# 예측: original = [1, 2, 3, 99]/ 그냥 99 추가하고 lst=[0,0]는 새로 리스트 바꿔끼운거잖아
 print("\n유제2) original =", original)
 # modify 안에서 append도 하고 재대입도 했는데 왜 이 결과인지,
 # "화살표"로 두 줄을 각각 설명:
@@ -61,17 +61,17 @@ b = a
 c = [1, 2, 3]
 
 # (a) 예측:
-#   a is b →        a is c →        a == c →
+#   a is b →  True      a is c →  False      a == c → True
 print("\n유제3)")
 print("  a is b:", a is b)
 print("  a is c:", a is c)
 print("  a == c:", a == c)
 #
 # (b) a is c는 False인데 a == c는 True인 이유를 화살표로 설명:
-#   →
+#   → 리스트 안에 있는 값이 같으니까. is가 false인 이유는 객체의 주소값이 다르니까 그런거고
 #
 # (c) 이 시점에서 [1,2,3] 객체는 메모리에 몇 개 있나? 그리고
 #     각각의 refcount는? (예측 후 sys.getrefcount로 확인)
-#   예측 →
+#   예측 → [1,2,3] 객체는 2개 존재. a의 [1,2,3]은 2, c의 [1,2,3]은 1 - getrefcount로 하면 +1로 표현됨.
 print("  refcount(a):", sys.getrefcount(a))
 print("  refcount(c):", sys.getrefcount(c))
