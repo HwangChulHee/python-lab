@@ -111,6 +111,14 @@ def main():
         "title": "asynclab — 코루틴·이벤트 루프",
         "subtitle": "코루틴은 진짜, 이벤트 루프와 네트워크만 재현 — 한 스텝 = 루프의 사건 하나",
         "src": src_lines,
+        # 호출부 — 이 소스가 실행되기까지의 배선 (build_trace()의 실제 코드 요약)
+        "boot": [
+            'selector = ScriptedSelector(SCRIPT, {3: "listen"})  # 각본 네트워크 = 가짜 OS',
+            "loop     = MiniEventLoop(selector, tracer)          # 미니 이벤트 루프",
+            "app      = make_app()                               # MiniAPI + GET /ping 라우트",
+            "listener = MiniListener(selector, fd=3)             # listen 소켓의 축약",
+            "loop.run_until_complete(serve(loop, app, listener)) # ← asyncio.run(...)에 해당",
+        ],
         "script": [{"t": e[0], "desc": e[4]} for e in SCRIPT],
         "steps": steps,
     })

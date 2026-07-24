@@ -70,7 +70,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .chg { animation:flash .9s ease-out; }
 
   /* ① 소스 — 크게, 세로로 최대한 */
-  #src { max-height:calc(100vh - 210px); overflow:auto; }
+  .boot { border:1px dashed #c9b8e6; background:#f7f3fc; border-radius:8px;
+          padding:8px 11px; margin-bottom:9px; overflow-x:auto; }
+  .boot-h { font-size:11px; color:#6a4bb0; font-weight:600; margin-bottom:5px; }
+  .boot pre { font:12px/1.65 ui-monospace,Consolas,monospace; color:var(--sub); }
+  #src { max-height:calc(100vh - 330px); overflow:auto; }
   .src-row { display:flex; gap:11px; padding:1.5px 8px; border-radius:6px;
              font:13.5px/1.62 ui-monospace,Consolas,monospace; color:var(--sub);
              white-space:pre; }
@@ -95,6 +99,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .frame .tag.push { color:#2f8f4e; background:#d9efe2; font-weight:700; }
   .frame .tag.pop { color:#b3543a; background:#f9e5de; font-weight:700; }
   .frame.coro.ghost { opacity:.55; border-style:dashed; }
+  .fnote { font:10.5px/1.5 system-ui; color:var(--mut); font-weight:400; margin-top:2px; }
   .cpu0 { border:1px dashed var(--sel); background:var(--selbg); color:var(--sel);
           border-radius:8px; padding:7px 11px; margin-bottom:7px; font-size:12.5px;
           text-align:center; }
@@ -177,6 +182,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 <div class="grid">
   <div class="panel srcpanel"><h2>① 소스 — demos/mini_web.py (📑 = 보관된 프레임의 책갈피)</h2>
+    <div class="boot"><div class="boot-h">호출부 — run.py의 &lt;module&gt;이 아래 소스를 이렇게 물렸다 (콜 스택 맨 바닥)</div>
+      <pre id="boot"></pre></div>
     <div id="src"></div></div>
   <div class="panel"><h2>② 콜 스택 (아래가 바닥 — 루프 프레임은 상주)</h2>
     <div id="stack"></div></div>
@@ -199,6 +206,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 $("subtitle").textContent = T.subtitle;
 $("slider").max = T.steps.length - 1;
+$("boot").textContent = T.boot.join("\n");
 
 const KIND_LABEL = { phase:"페이즈", resume:"코루틴 재개", suspend:"프레임 보관",
                      created:"코루틴 생성", done:"코루틴 종료", loop:"루프" };
@@ -291,13 +299,14 @@ function render() {
     : `<span class="tag pop">↓ 내려놓음 — 보관</span>`;
   const ghosts = popped.slice().reverse().map(f => coroFrame(f, popTag, true));
   const frames = s.stack.slice().reverse().map(f => {
+    const note = f.note ? `<div class="fnote">${esc(f.note)}</div>` : "";
     if (f.kind === "loop")
-      return `<div class="frame loopfr">${esc(f.name)}<span class="tag res">상주</span></div>`;
+      return `<div class="frame loopfr">${esc(f.name)}<span class="tag res">상주</span>${note}</div>`;
     if (f.kind === "coro") {
       const up = pushed.has(fkey(f)) ? `<span class="tag push">↑ 얹힘</span>` : "";
       return coroFrame(f, up, false);
     }
-    return `<div class="frame">${esc(f.name)}</div>`;
+    return `<div class="frame">${esc(f.name)}${note}</div>`;
   });
   const cpu = s.phase === "SELECT"
     ? `<div class="cpu0">💤 OS 대기 중 — CPU 0% (파이썬 코드는 돌지 않는다)</div>` : "";

@@ -65,8 +65,10 @@ class Tracer:
     # ---------------- 스냅샷 ----------------
     def _snap(self, kind, narration, notified=(), hi=None):
         loop = self.loop
-        stack = [{"name": "<module> — run.py", "kind": "base", "line": None},
-                 {"name": "MiniEventLoop.run_until_complete", "kind": "loop", "line": None}]
+        stack = [{"name": "<module> — run.py", "kind": "base", "line": None,
+                  "note": "app·listener를 만들고 loop.run_until_complete(serve(...))를 호출한 곳"},
+                 {"name": "MiniEventLoop.run_until_complete", "kind": "loop", "line": None,
+                  "note": "단일 while: SELECT → WAKE → RUN — 위에 얹히는 프레임들을 구동"}]
         if self.current is not None:
             for f in _chain(self.current.coro, self.src_path):
                 stack.append({"name": f["name"], "kind": "coro",
@@ -110,8 +112,11 @@ class Tracer:
 
     # ---------------- 사건들 (루프가 부른다) ----------------
     def loop_started(self):
-        self._snap("loop", "run_until_complete()가 콜 스택에 눌러앉는다 — 루프는 배경 "
-                   "데몬이 아니라 이 '상주 프레임'이다. 끝날 때까지 내려가지 않는다.")
+        self._snap("loop", "run.py의 <module>이 selector(각본 네트워크)·loop·app·listener를 "
+                   "만든 뒤 loop.run_until_complete(serve(loop, app, listener))를 호출했다 — "
+                   "asyncio.run(main())에 해당하는 순간. 이 호출로 run_until_complete()가 "
+                   "콜 스택에 눌러앉는다. 루프는 배경 데몬이 아니라 이 '상주 프레임'이고, "
+                   "끝날 때까지 내려가지 않는다.")
 
     def task_created(self, task):
         code = task.coro.cr_code
