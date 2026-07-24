@@ -48,6 +48,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .kbadge.created { color:#6a4bb0; background:#f0e9fb; }
   .kbadge.done { color:#8b897f; background:#eeece5; }
   .kbadge.loop { color:#1c4d94; background:#d7e5f8; }
+  .kbadge.net { color:#2f8f4e; background:#e6f4ec; }
+  .story.k-net { border-left-color:#2f8f4e; }
   .story-meta .tp { font:11.5px ui-monospace,monospace; color:var(--mut); margin-top:4px; display:block; }
   .story-text { font-size:15px; line-height:1.75; }
   .story-text code, .concept code, .look code {
@@ -89,6 +91,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
              white-space:pre; }
   .src-row .no { color:var(--mut); min-width:26px; text-align:right; user-select:none; }
   .src-row.doc { opacity:.5; }             /* 모듈 docstring은 옅게 — 코드에 집중 */
+  .src-file { position:sticky; top:0; font:600 12px ui-monospace,monospace; color:#6a4bb0;
+              background:#f2ecfb; border:1px solid #d9cbf0; border-radius:7px;
+              padding:4px 10px; margin:10px 0 6px; z-index:2; }
+  .src-file:first-child { margin-top:0; }
   .src-row.on { background:var(--warnbg); color:var(--warn); font-weight:600; }
   .bm { font:10.5px system-ui; border-radius:5px; padding:0 6px; margin-left:8px;
         align-self:center; white-space:nowrap; }
@@ -181,7 +187,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   input[type=range] { flex:1; }
   .pos { font-size:13px; color:var(--mut); min-width:70px; text-align:right; }
 </style></head><body><div class="wrap">
-<h1>asynclab — 코루틴·이벤트 루프</h1>
+<h1 id="h1">asynclab</h1>
 <div class="sub" id="subtitle"></div>
 <div class="progress"><i id="prog"></i></div>
 <div class="story" id="story">
@@ -192,8 +198,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="look" id="look"></div>
 </div>
 <div class="grid">
-  <div class="panel srcpanel"><h2>① 소스 — demos/mini_web.py (📑 = 보관된 프레임의 책갈피)</h2>
-    <div class="boot"><div class="boot-h">호출부 — run.py의 &lt;module&gt;이 아래 소스를 이렇게 물렸다 (콜 스택 맨 바닥)</div>
+  <div class="panel srcpanel"><h2>① 소스 — weblab 3파일 그대로 (📑 = 보관된 프레임의 책갈피)</h2>
+    <div class="boot"><div class="boot-h">호출부 — run.py가 이 코드를 이렇게 물렸다 (verify.py check()와 동일한 방식)</div>
       <pre id="boot"></pre></div>
     <div id="src"></div></div>
   <div class="panel"><h2>② 콜 스택 (아래가 바닥 — 루프 프레임은 상주)</h2>
@@ -215,12 +221,14 @@ const T = __DATA__;
 let i = 0;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+$("h1").textContent = T.title;
 $("subtitle").textContent = T.subtitle;
 $("slider").max = T.steps.length - 1;
 $("boot").textContent = T.boot.join("\n");
 
 const KIND_LABEL = { phase:"페이즈", resume:"코루틴 재개", suspend:"프레임 보관",
-                     created:"코루틴 생성", done:"코루틴 종료", loop:"루프" };
+                     created:"Task 생성", done:"코루틴 종료", loop:"루프",
+                     net:"클라이언트" };
 
 /* 태스크별 고정 색 — 어느 패널에서든 같은 색 = 같은 손님 */
 const LAB = {
@@ -248,15 +256,18 @@ function fmtNarr(text) {
 /* 준비큐·장부 콜백 표기에서 태스크 라벨을 뽑아 색을 입힌다 */
 const cbOwner = c => (c.match(/^Task\((.+)\)\.step$/) || [])[1];
 
-/* 모듈 docstring 줄들(1행이 \"\"\"로 시작 ~ 닫는 \"\"\")은 옅게 표시한다 */
-const DOC = new Set();
-if ((T.src[0] || "").startsWith('\"\"\"')) {
-  DOC.add(1);
-  for (let n = 1; n < T.src.length; n++) {
-    DOC.add(n + 1);
-    if (T.src[n].includes('\"\"\"')) break;
+/* 파일별 모듈 docstring 줄들(1행이 \"\"\"로 시작 ~ 닫는 \"\"\")은 옅게 표시한다 */
+const DOCS = T.files.map(fl => {
+  const doc = new Set();
+  if ((fl.lines[0] || "").startsWith('\"\"\"')) {
+    doc.add(1);
+    for (let n = 1; n < fl.lines.length; n++) {
+      doc.add(n + 1);
+      if (fl.lines[n].includes('\"\"\"')) break;
+    }
   }
-}
+  return doc;
+});
 
 /* 컨테이너 안에서만 세로 스크롤 — 페이지 전체가 딸려 움직이지 않게 */
 function centerIn(box, el) {
@@ -281,16 +292,20 @@ function render() {
       s.detail.look.map(l => `<div class="lk">· ${fmtNarr(l)}</div>`).join("")
     : "";
 
-  // ① 소스 — 하이라이트 + 책갈피(태스크 색)
-  const marks = {};                                // line → [labels]
-  s.src.bookmarks.forEach(b => (marks[b.line] = marks[b.line] || []).push(b.label));
-  $("src").innerHTML = T.src.map((ln, n0) => {
-    const n = n0 + 1;
-    const bms = (marks[n] || []).map(l => `<span class="bm" style="${labStyle(l)}">${esc(l)}</span>`).join("");
-    const bg = marks[n] ? `background:${lab(marks[n][0]).bg}` : "";
-    const cls = (n === s.src.hi ? "on" : "") + (DOC.has(n) ? " doc" : "");
-    return `<div class="src-row ${cls}" style="${n === s.src.hi ? "" : bg}">` +
-           `<span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
+  // ① 소스 — 파일별 섹션 + 하이라이트 + 책갈피(태스크 색)
+  const marks = {};                                // "f:line" → [labels]
+  s.src.bookmarks.forEach(b => (marks[b.f + ":" + b.line] = marks[b.f + ":" + b.line] || []).push(b.label));
+  $("src").innerHTML = T.files.map((fl, fi) => {
+    const rows = fl.lines.map((ln, n0) => {
+      const n = n0 + 1, key = fi + ":" + n;
+      const on = s.src.hi && s.src.hi.f === fi && s.src.hi.line === n;
+      const bms = (marks[key] || []).map(l => `<span class="bm" style="${labStyle(l)}">${esc(l)}</span>`).join("");
+      const bg = marks[key] ? `background:${lab(marks[key][0]).bg}` : "";
+      const cls = (on ? "on" : "") + (DOCS[fi].has(n) ? " doc" : "");
+      return `<div class="src-row ${cls}" style="${on ? "" : bg}">` +
+             `<span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
+    }).join("");
+    return `<div class="src-file">${esc(fl.name)}</div>` + rows;
   }).join("");
   centerIn($("src"), $("src").querySelector(".on") || $("src").querySelector(".bm"));
 
@@ -305,7 +320,7 @@ function render() {
 
   const coroFrame = (f, extraTag, ghost) => {
     const c = lab(f.label);
-    const ln = f.line ? `<span class="tag ln">줄 ${f.line}</span>` : "";
+    const ln = f.floc ? `<span class="tag ln">${esc(f.floc)}</span>` : "";
     return `<div class="frame coro ${f.infra ? "infra" : ""} ${ghost ? "ghost" : ""}"` +
            ` style="border-color:${c.bd};background:${c.bg};color:${c.fg}">` +
            `${esc(f.name)}<span class="tag" style="${labStyle(f.label)}">${esc(f.label)}</span>${ln}${extraTag}</div>`;
@@ -361,9 +376,9 @@ function render() {
     `<span class="fchip" title="${esc(f.note)}">${esc(f.name)}</span>`).join("");
   const coros = s.heap.coros.map(c => {
     const p = prevCoro[c.label];
-    const changed = p && (p.state !== c.state || p.line !== c.line);
-    const fr = c.line !== null
-      ? `cr_frame.f_lineno = <b>${c.line}</b> (멈춘 줄 = 이 손님의 상태)`
+    const changed = p && (p.state !== c.state || p.loc !== c.loc);
+    const fr = c.loc
+      ? `보관 지점(cr_frame) = <b>${esc(c.loc)}</b> (멈춘 줄 = 이 손님의 상태)`
       : `cr_frame = <b>None</b> — 프레임 소멸`;
     const lo = c.locals.map(kv => `<div>${esc(kv[0])} = ${esc(kv[1])}</div>`).join("");
     return `<div class="hcard coro ${c.state} ${changed ? "chg" : ""}" style="border-left-color:${lab(c.label).fg}">` +
@@ -398,13 +413,13 @@ $("guide").innerHTML = [
   ` <span class="dot" style="background:${LAB.client_A.bd}"></span>client_A` +
   ` <span class="dot" style="background:${LAB.client_B.bd}"></span>client_B` +
   ` — 어느 패널에서든 같은 색 = 같은 태스크</div>`,
-  `<div class="row"><b>SELECT → WAKE → RUN</b> — 루프 while 한 바퀴. 잠들고, 장부 보고 깨우고, 준비큐를 소진한다</div>`,
-  `<div class="row">📑 책갈피 — 보관된 프레임이 멈춘 줄. 멈춘 줄이 곧 그 연결의 상태다</div>`,
-  `<div class="row"><code>Task(x).step</code> — 준비큐에 들어가는 건 코루틴이 아니라 이 콜백(바운드 메서드)</div>`,
+  `<div class="row"><b>SELECT → WAKE → RUN</b> — _run_once 한 바퀴. 진짜 epoll로 잠들고, 콜백을 수거하고, 준비큐를 소진한다</div>`,
+  `<div class="row">📑 책갈피 — 보관된 프레임(cr_frame)이 멈춘 줄. 멈춘 줄이 곧 그 연결의 상태다</div>`,
+  `<div class="row"><code>Task(x).__step</code> — 준비큐에 들어가는 건 코루틴이 아니라 이 콜백. 진짜 asyncio.Task의 메서드다</div>`,
   `<div class="row">노란 테두리 플래시 — 직전 스텝과 달라진 코루틴 카드</div>`,
   `<div class="row">콜 스택 <b style="color:#2f8f4e">↑ 얹힘</b> = 방금 재개된 프레임 · ` +
   `<b style="color:#b3543a">↓ 내려놓음/소멸</b> = 방금 내려간 프레임(점선 유령으로 한 스텝 남는다)</div>`,
-  `<div class="row">점선 프레임 — 엔진(channel.py) 내부라 소스 패널에 줄 표시가 없는 프레임</div>`,
+  `<div class="row">회색 바닥 프레임 — 진짜 asyncio 내부 콜 스택(base_events.py 등 실제 파일:줄) · 점선 코루틴 프레임 — asyncio streams 내부</div>`,
 ].join("");
 
 $("next").onclick = () => { if (i < T.steps.length - 1) { i++; render(); } };
