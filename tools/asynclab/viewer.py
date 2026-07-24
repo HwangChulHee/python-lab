@@ -2,10 +2,15 @@
 viewer.py — 트레이스(dict) → 단일 자족 HTML 문자열
 
 pvmlab viewer의 시각 언어를 따른다: 같은 CSS 변수, 카드형 패널, ←/→ 스테핑.
-가독성 장치 세 가지:
+가독성 장치:
+  · 기본은 '이야기 모드' — story=True 스텝만 걷는다. 숨긴 asyncio 배관 구간은
+    타임라인에 ···n 으로 존재만 알리고, 토글/···클릭으로 전체 모드 전환
+  · 챕터 점프 5개 (기동/A 도착/B 도착/B 완주/A 마무리) — 'B 완주' 챕터에는
+    "client_A는 아직 :37" 배지가 상시 떠 있다
+  · 같은 해설 문단은 첫 등장에서만 전문 표시, 이후엔 한 줄 요약 + 펼치기
   · 내레이션은 상단 전폭 '스토리' 띠 — 키워드(Task/fd/줄/페이즈)를 자동 강조
   · 태스크별 고정 색 (serve=보라, client_A=파랑, client_B=초록) — 책갈피·콜 스택·
-    준비큐·장부·힙 카드 어디서든 같은 색이면 같은 손님이다
+    준비큐·장부·힙 카드 어디서든 같은 색이면 같은 손님이다 (배관 콜백은 회색)
   · 직전 스텝과 달라진 코루틴 카드에 플래시 표시
 
 패널: ① 소스 ② 콜 스택 ③ 이벤트 루프 내부 / ④ 힙 ⑤ 네트워크 타임라인 ⑥ 읽는 법.
@@ -28,8 +33,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .wrap { max-width:1560px; margin:0 auto; }
   h1 { font-size:19px; font-weight:600; margin-bottom:3px; }
   .sub { font-size:13.5px; color:var(--sub); margin-bottom:12px; }
-  .progress { height:4px; background:var(--line); border-radius:2px; margin-bottom:12px; }
+  .progress { height:4px; background:var(--line); border-radius:2px; margin-bottom:10px; }
   .progress i { display:block; height:100%; background:var(--acc); border-radius:2px; }
+
+  /* 상단 조작줄 — 챕터 점프 + 이야기/전체 모드 토글 */
+  .topbar { display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  .chbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; flex:1; }
+  .chbtn { font-size:12.5px; padding:4px 11px; border:1px solid var(--line); border-radius:8px;
+           background:var(--card); color:var(--sub); cursor:pointer; user-select:none; }
+  .chbtn .chno { color:var(--mut); font-size:11px; margin-right:4px; }
+  .chbtn.on { border-color:var(--acc); background:var(--accbg); color:#1c4d94; font-weight:700; }
+  .chbtn.on .chno { color:var(--acc); }
+  .abadge { font-size:11.5px; font-weight:700; color:var(--warn); background:var(--warnbg);
+            border:1px solid #e6c98a; border-radius:6px; padding:3px 9px; white-space:nowrap; }
+  .modebtn { padding:5px 13px; font-size:12.5px; }
+  /* 이야기 타임라인 — 점 = 이야기 스텝, ···n = 숨긴 배관 스텝 (진짜라서 배관이 있다) */
+  .strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin-bottom:12px; }
+  .sdot { width:11px; height:11px; border-radius:4px; border:1px solid rgba(0,0,0,.12);
+          cursor:pointer; }
+  .sdot.cur { outline:2px solid var(--acc); outline-offset:1px; }
+  .sgap { font:11px ui-monospace,monospace; color:var(--mut); border:1px dashed var(--line);
+          border-radius:6px; padding:0 6px; cursor:pointer; user-select:none; }
+  .sgap:hover { color:var(--sub); border-color:var(--mut); }
 
   /* 스토리 띠 — 이번 스텝에서 일어난 일 (가장 먼저 읽는 곳) */
   .story { display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center;
@@ -63,6 +88,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .concept { grid-column:1 / -1; margin-top:4px; padding-top:10px;
              border-top:1px dashed var(--line); font-size:13.5px; line-height:1.8;
              color:var(--sub); }
+  /* 반복 해설은 접는다 — 처음 만난 스텝에서만 전문이 펼쳐진다 */
+  .cfold summary { cursor:pointer; list-style-position:outside; color:var(--mut); }
+  .cfold summary .unfold { font-size:11.5px; color:var(--acc); }
+  .cfold[open] summary .unfold { display:none; }
+  .cfold[open] > div { margin-top:6px; }
   .look { grid-column:1 / -1; margin-top:8px; }
   .look-h { font-size:11.5px; font-weight:700; color:var(--mut); margin-bottom:4px; }
   .look .lk { font-size:13px; line-height:1.7; color:var(--sub); padding:1px 0 1px 4px; }
@@ -138,6 +168,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .cb { padding:2px 9px; border-radius:6px; border:1px solid var(--line);
         font:12px ui-monospace,monospace; background:var(--card); color:var(--sub); }
   .cb.exec { font-weight:700; }
+  .cb.dim { opacity:.55; }               /* 배관 콜백 — 관찰 태스크가 아니면 회색 */
   .empty { font-size:12px; color:var(--mut); padding:2px 0; }
   .wrow { display:grid; grid-template-columns:auto 1fr; gap:8px; padding:4px 9px;
           border:1px solid var(--line); border-radius:7px; margin-bottom:5px;
@@ -196,6 +227,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <h1 id="h1">asynclab</h1>
 <div class="sub" id="subtitle"></div>
 <div class="progress"><i id="prog"></i></div>
+<div class="topbar">
+  <div class="chbar" id="chbar"></div>
+  <button class="modebtn" id="modebtn"></button>
+</div>
+<div class="strip" id="strip"></div>
 <div class="story" id="story">
   <div class="story-meta"><span class="kbadge" id="kind"></span><span class="tp" id="tp"></span></div>
   <div class="story-text" id="desc"></div>
@@ -227,12 +263,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 const T = __DATA__;
 let i = 0;
 let curFile = 0;                 // 소스 패널에 지금 펼쳐진 파일 (탭)
+let mode = "story";              // "story" = 서사 스텝만 / "full" = 배관 포함 전부
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 $("h1").textContent = T.title;
 $("subtitle").textContent = T.subtitle;
-$("slider").max = T.steps.length - 1;
 $("boot").textContent = T.boot.join("\n");
+
+const ALL = T.steps.map((_, n) => n);
+const STORY = ALL.filter(n => T.steps[n].story);
+const vis = () => (mode === "story" ? STORY : ALL);
+/* 현재 스텝 i의 가시 목록 내 위치 (i가 숨김 스텝이면 직전 가시 스텝) */
+const vpos = () => { const v = vis(); let p = 0; v.forEach((n, k) => { if (n <= i) p = k; }); return p; };
+const snap = () => { i = vis()[vpos()]; };
+
+/* 같은 해설 문단(텍스트 동일)은 모드별 첫 등장 스텝에서만 전문을 펼친다 */
+function firstMap(list) {
+  const seen = {}, first = {};
+  list.forEach(n => {
+    const c = T.steps[n].detail.concept;
+    if (!c) return;
+    if (seen[c] === undefined) seen[c] = n;
+    first[n] = seen[c] === n;
+  });
+  return first;
+}
+const FIRST_STORY = firstMap(STORY), FIRST_FULL = firstMap(ALL);
 
 const KIND_LABEL = { phase:"페이즈", resume:"코루틴 재개", suspend:"프레임 보관",
                      created:"Task 생성", done:"코루틴 종료", loop:"루프",
@@ -262,7 +318,7 @@ function fmtNarr(text) {
 }
 
 /* 준비큐·장부 콜백 표기에서 태스크 라벨을 뽑아 색을 입힌다 */
-const cbOwner = c => (c.match(/^Task\((.+)\)\.step$/) || [])[1];
+const cbOwner = c => (c.match(/^Task\((serve|client_A|client_B)\)\./) || [])[1];
 
 /* 파일별 모듈 docstring 줄들(1행이 \"\"\"로 시작 ~ 닫는 \"\"\")은 옅게 표시한다 */
 const DOCS = T.files.map(fl => {
@@ -283,10 +339,49 @@ function centerIn(box, el) {
   box.scrollTop = el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2;
 }
 
+/* 상단 바 — 챕터 점프 5개 (+ 'B 완주' 챕터의 A 책갈피 배지) / 모드 토글 / 타임라인 */
+function renderTop(s) {
+  const aBm = s.src.bookmarks.find(b => b.label === "client_A");
+  const badge = s.chapter === 3
+    ? `<span class="abadge">📑 client_A는 아직 :${aBm ? aBm.line : 37}에 멈춰 있다</span>` : "";
+  $("chbar").innerHTML = T.chapters.map((c, ci) =>
+    `<span class="chbtn ${ci === s.chapter ? "on" : ""}" data-c="${ci}" title="${esc(c.hint)}">` +
+    `<span class="chno">${ci + 1}</span>${esc(c.title)}</span>`).join("") + badge;
+  $("chbar").querySelectorAll(".chbtn").forEach(el => el.onclick = () => {
+    const t = vis().find(n => T.steps[n].chapter === +el.dataset.c);
+    if (t !== undefined) { i = t; render(); }
+  });
+  $("modebtn").textContent = mode === "story"
+    ? `전체 모드로 — 배관 포함 ${ALL.length}스텝` : `이야기 모드로 — ${STORY.length}스텝`;
+  $("modebtn").onclick = () => { mode = mode === "story" ? "full" : "story"; snap(); render(); };
+
+  // 타임라인 스트립: 이야기 모드에서만 — ···n 이 숨긴 배관 스텝의 존재를 알린다
+  if (mode !== "story") { $("strip").innerHTML = ""; return; }
+  let html = "", last = -1;
+  const gapChip = (from, n) =>
+    `<span class="sgap" data-g="${from}" title="asyncio 배관 ${n}스텝 — 눌러서 전체 모드로 보기">···${n}</span>`;
+  STORY.forEach(n => {
+    if (n - last - 1 > 0) html += gapChip(last + 1, n - last - 1);
+    const st = T.steps[n];
+    const bg = st.subject && LAB[st.subject] ? LAB[st.subject].bd : "#c8c6bc";
+    html += `<span class="sdot ${n === i ? "cur" : ""}" data-n="${n}" style="background:${bg}"` +
+            ` title="${esc(KIND_LABEL[st.kind] || st.kind)}${st.subject ? " · " + esc(st.subject) : ""}"></span>`;
+    last = n;
+  });
+  if (T.steps.length - 1 - last > 0) html += gapChip(last + 1, T.steps.length - 1 - last);
+  $("strip").innerHTML = html;
+  $("strip").querySelectorAll(".sdot").forEach(el => el.onclick = () => { i = +el.dataset.n; render(); });
+  $("strip").querySelectorAll(".sgap").forEach(el => el.onclick = () => {
+    mode = "full"; i = +el.dataset.g; render();
+  });
+}
+
 function render() {
   const s = T.steps[i];
   const prev = i > 0 ? T.steps[i - 1] : null;
-  $("prog").style.width = (i / (T.steps.length - 1) * 100) + "%";
+  const v = vis(), p = vpos();
+  $("prog").style.width = (v.length > 1 ? p / (v.length - 1) * 100 : 100) + "%";
+  renderTop(s);
 
   // 스토리 띠
   $("story").className = "story k-" + s.kind;
@@ -294,7 +389,17 @@ function render() {
   $("kind").textContent = KIND_LABEL[s.kind] || s.kind;
   $("tp").textContent = `T=${s.clock} · ${s.phase}`;
   $("desc").innerHTML = fmtNarr(s.narration);
-  $("concept").innerHTML = s.detail.concept ? fmtNarr(s.detail.concept) : "";
+  // 해설 — 같은 문단은 첫 등장에서만 전문, 이후엔 한 줄 요약 + 펼치기
+  const con = s.detail.concept;
+  if (!con) $("concept").innerHTML = "";
+  else if ((mode === "story" ? FIRST_STORY : FIRST_FULL)[i]) $("concept").innerHTML = fmtNarr(con);
+  else {
+    const m = con.match(/^.{8,90}?(?:다|이다)\./);
+    const head = m ? m[0] : con.slice(0, 70) + "…";
+    $("concept").innerHTML =
+      `<details class="cfold"><summary>${fmtNarr(head)} <span class="unfold">(앞에서 본 해설 — 펼치기)</span></summary>` +
+      `<div>${fmtNarr(con)}</div></details>`;
+  }
   $("look").innerHTML = s.detail.look.length
     ? `<div class="look-h">👀 지금 볼 곳</div>` +
       s.detail.look.map(l => `<div class="lk">· ${fmtNarr(l)}</div>`).join("")
@@ -363,9 +468,11 @@ function render() {
   const phases = ["SELECT","WAKE","RUN"].map(p =>
     `<div class="ph ${p} ${p === s.phase ? "on " + p : ""}">${p}${
       p==="SELECT"?" · 잠듦":p==="WAKE"?" · 수거":" · 소진"}</div>`).join("");
-  const cbChip = (c, extra) =>
-    `<span class="cb ${extra || ""}" style="${labStyle(cbOwner(c))}">${esc(c)}</span>`;
-  const running = s.running ? cbChip(`Task(${s.running}).step`, "exec").replace("</span>", " ▶ 실행 중</span>") : "";
+  const cbChip = (c, extra) => {
+    const own = cbOwner(c);                       // 관찰 태스크는 제 색, 배관 콜백은 회색
+    return `<span class="cb ${own ? "" : "dim"} ${extra || ""}" style="${labStyle(own)}">${esc(c)}</span>`;
+  };
+  const running = s.running ? cbChip(`Task(${s.running}).__step`, "exec").replace("</span>", " ▶ 실행 중</span>") : "";
   const ready = s.loop.ready.map(c => cbChip(c)).join("");
   const watch = s.loop.watch.map(w =>
     `<div class="wrow ${w.notified ? "hot" : ""}"><span class="fd">fd ${w.fd} (${esc(w.name)})</span>` +
@@ -418,10 +525,11 @@ function render() {
       `<span class="chk">${used ? "✓" : "·"}</span><span>${esc(e.desc)}</span></div>`;
   }).join("");
 
-  $("slider").value = i;
-  $("pos").textContent = i + " / " + (T.steps.length - 1);
-  $("prev").disabled = i === 0;
-  $("next").disabled = i === T.steps.length - 1;
+  $("slider").max = v.length - 1;
+  $("slider").value = p;
+  $("pos").textContent = `${p} / ${v.length - 1} · ${mode === "story" ? "이야기" : "전체"}`;
+  $("prev").disabled = p === 0;
+  $("next").disabled = p === v.length - 1;
 }
 
 $("guide").innerHTML = [
@@ -429,6 +537,9 @@ $("guide").innerHTML = [
   ` <span class="dot" style="background:${LAB.client_A.bd}"></span>client_A` +
   ` <span class="dot" style="background:${LAB.client_B.bd}"></span>client_B` +
   ` — 어느 패널에서든 같은 색 = 같은 태스크</div>`,
+  `<div class="row"><b>이야기 모드</b> — 서사 스텝만 표시. <code>···n</code> = 숨긴 asyncio 배관 n스텝` +
+  ` (진짜라서 배관이 있다 — 누르면 전체 모드로 들어가 볼 수 있다)</div>`,
+  `<div class="row"><b>챕터 버튼</b> — 기동 → A 도착 → B 도착 → B 완주 → A 마무리. 누르면 그 장면의 첫 스텝으로 점프</div>`,
   `<div class="row"><b>SELECT → WAKE → RUN</b> — _run_once 한 바퀴. 진짜 epoll로 잠들고, 콜백을 수거하고, 준비큐를 소진한다</div>`,
   `<div class="row">📑 책갈피 — 보관된 프레임(cr_frame)이 멈춘 줄. 멈춘 줄이 곧 그 연결의 상태다</div>`,
   `<div class="row"><code>Task(x).__step</code> — 준비큐에 들어가는 건 코루틴이 아니라 이 콜백. 진짜 asyncio.Task의 메서드다</div>`,
@@ -438,13 +549,14 @@ $("guide").innerHTML = [
   `<div class="row">회색 바닥 프레임 — 진짜 asyncio 내부 콜 스택(base_events.py 등 실제 파일:줄) · 점선 코루틴 프레임 — asyncio streams 내부</div>`,
 ].join("");
 
-$("next").onclick = () => { if (i < T.steps.length - 1) { i++; render(); } };
-$("prev").onclick = () => { if (i > 0) { i--; render(); } };
-$("slider").oninput = e => { i = +e.target.value; render(); };
+$("next").onclick = () => { const v = vis(), p = vpos(); if (p < v.length - 1) { i = v[p + 1]; render(); } };
+$("prev").onclick = () => { const v = vis(), p = vpos(); if (p > 0) { i = v[p - 1]; render(); } };
+$("slider").oninput = e => { i = vis()[+e.target.value]; render(); };
 document.onkeydown = e => {
   if (e.key === "ArrowRight") $("next").click();
   if (e.key === "ArrowLeft") $("prev").click();
 };
+snap();                          // 기본은 이야기 모드 — 첫 이야기 스텝에서 시작
 render();
 </script></body></html>
 """

@@ -22,13 +22,25 @@ run_forever 같은 '진짜 asyncio 프레임'이 실제 파일:줄번호와 함�
 """
 
 import asyncio
+import functools
 import re
 import socket
 import sys
 from asyncio import tasks as _tasks
 from pathlib import Path
 
-_LOCALS_PICK = ("method", "path", "body", "scope")
+_LOCALS_PICK = ("method", "path", "body")
+
+# 이야기 모드 — 학습 서사의 주인공과 랜드마크 함수
+_OBS = {"serve", "client_A", "client_B"}
+_STORY_CALLS = {"MiniAPI.__call__", "hello", "echo"}   # ASGI 경계 + 사용자 코드
+_CHAPTERS = [
+    {"title": "기동",     "hint": "루프·serve 시작 → :108에서 잠듦"},
+    {"title": "A 도착",   "hint": "A 접속 → 요청라인만 보내고 :37에서 멈춤"},
+    {"title": "B 도착",   "hint": "B 접속 → :26 책갈피"},
+    {"title": "B 완주",   "hint": "B 재개 → 나중에 왔는데 먼저 DONE"},
+    {"title": "A 마무리", "hint": "A 재개 → 응답 → 서버 종료"},
+]
 
 # 세 파일의 함수 '진입'을 sys.monitoring으로 잡아 스텝으로 만든다.
 # (hello/echo나 MiniAPI 내부는 await 없이 즉시 리턴하므로 보관 스냅샷에는 절대
@@ -165,10 +177,25 @@ class RealTracer:
         return q.rsplit(".", 1)[-1]             # serve / check / …
 
     def _cb_label(self, cb):
-        owner = getattr(cb, "__self__", None)
-        if isinstance(owner, TracingTask):
-            return f"Task({owner._label}).{cb.__name__.replace('_Task__', '__')}"
-        return _scrub(getattr(cb, "__qualname__", repr(cb)))
+        """준비큐/장부/타이머 표기 — 함수명+핵심 인자만, 60자 상한."""
+        if isinstance(cb, functools.partial):
+            name = getattr(cb.func, "__qualname__", repr(cb.func)).rsplit(".", 1)[-1]
+            bits = []
+            for a in cb.args:
+                if isinstance(a, int):
+                    bits.append(str(a))
+                elif hasattr(a, "fileno"):
+                    try:
+                        bits.append(f"fd={a.fileno()}")
+                    except Exception:
+                        pass
+            text = f"{name}({', '.join(bits)})"
+        else:
+            owner = getattr(cb, "__self__", None)
+            if isinstance(owner, TracingTask):
+                return f"Task({owner._label}).{cb.__name__.replace('_Task__', '__')}"
+            text = _scrub(getattr(cb, "__qualname__", None) or repr(cb))
+        return text if len(text) <= 60 else text[:57] + "..."
 
     def _handle_label(self, handle):
         return self._cb_label(getattr(handle, "_callback", handle))
@@ -204,7 +231,8 @@ class RealTracer:
         return rows
 
     # ---------------- 스냅샷 ----------------
-    def _snap(self, kind, narration, concept="", look=(), notified=(), hi=None, skip=3):
+    def _snap(self, kind, narration, concept="", look=(), notified=(), hi=None, skip=3,
+              subject=None, callee=None, cancelling=False):
         loop = self.loop
         cur_chain = self._chain(self.current.get_coro()) if self.current else []
         stack = self._real_stack(skip, self.current._label if self.current else "")
@@ -237,7 +265,7 @@ class RealTracer:
                 loc = self._floc(*mark) if mark else None
                 fr = coro.cr_frame
                 lo = fr.f_locals if fr is not None else {}
-                picked = [[k, _short(lo[k])] for k in _LOCALS_PICK if k in lo][:3]
+                picked = [[k, _short(lo[k])] for k in _LOCALS_PICK if k in lo]
                 waiter = getattr(t, "_fut_waiter", None)
                 if waiter is not None and t is not self.current:
                     picked.append(["_fut_waiter", _short(waiter, 56)])
@@ -264,6 +292,7 @@ class RealTracer:
         self.steps.append({
             "kind": kind, "clock": self.clock, "phase": self.phase,
             "narration": narration,
+            "subject": subject, "callee": callee, "cancelling": cancelling,
             "detail": {"concept": concept, "look": list(look)},
             "running": self.current._label if self.current else None,
             "stack": stack,
@@ -286,9 +315,10 @@ class RealTracer:
         fi = self._fidx(coro.cr_code.co_filename)
         hi = (fi, coro.cr_frame.f_lineno) if fi >= 0 and coro.cr_frame else None
         self._snap("created",
-                   f"진짜 asyncio.Task 생성 — loop.create_task()가 코루틴 "
-                   f"{coro.cr_code.co_qualname}(...)을 Task({task._label})로 감쌌다. "
+                   f"Task({task._label}) 생성 — loop.create_task()가 코루틴 "
+                   f"{coro.cr_code.co_qualname}(...)을 진짜 asyncio.Task로 감쌌다. "
                    f"Task.__init__이 곧바로 call_soon(self.__step)을 불러 준비큐에 등록했다.",
+                   subject=task._label,
                    concept=(
                        "async def를 호출한 순간엔 코루틴 객체만 생겼고 본문은 한 줄도 "
                        "돌지 않았다. asyncio.Task(진짜)가 그 코루틴의 운전기사가 된다 — "
@@ -314,9 +344,11 @@ class RealTracer:
         where = (f"{Path(self.src_paths[deep['f']]).stem}.py의 {deep['name']}이(가) "
                  f"{loc}부터" if deep and loc else "코루틴이")
         self._snap("resume",
-                   f"루프가 준비큐의 Handle을 실행 → 진짜 Task({task._label}).__step이 "
-                   f"coro.send()를 부른다"
-                   + (f" — {loc}에서 재개." if loc else "."),
+                   f"Task({task._label}) 재개"
+                   + (f" — {loc}에서 이어서 달린다." if loc else " — 처음부터 달리기 시작한다.")
+                   + " 루프가 준비큐의 Handle을 실행해 Task.__step → coro.send()를 불렀다.",
+                   subject=task._label,
+                   cancelling=getattr(task, "cancelling", lambda: 0)() > 0,
                    concept=(
                        "② 콜 스택이 핵심 증거다. 바닥부터: <module>(run.py) → "
                        "run_until_complete → run_forever(진짜 루프의 while) → _run_once → "
@@ -341,13 +373,14 @@ class RealTracer:
                                     "serve_forever에서 이 예외를 받고 async with를 빠져나오며 "
                                     "서버를 닫았다. 실무 asyncio 난이도의 절반이 이 취소 "
                                     "처리에 있다."),
-                           look=(f"④ 힙 — {task._label} 카드 DONE",), skip=4)
+                           look=(f"④ 힙 — {task._label} 카드 DONE",),
+                           subject=task._label, skip=4)
                 return
             earlier = [t._label for t in self.tasks
                        if t._label.startswith("client_") and not t.done()
                        and self.tasks.index(t) < self.tasks.index(task)]
-            msg = (f"코루틴이 return까지 도달 — StopIteration을 Task.__step이 받아 "
-                   f"Task({task._label})를 완료 처리했다.")
+            msg = (f"Task({task._label}) 완료 — 코루틴이 return까지 도달했고, "
+                   f"StopIteration을 Task.__step이 받아 완료 처리했다.")
             concept = ("진짜 Task도 StopIteration으로 끝을 안다(제너레이터와 동일한 "
                        "규약). 결과는 Task(=Future)에 저장되고, 이 Task를 await하던 쪽이 "
                        "있다면 콜백으로 깨어난다.")
@@ -360,15 +393,16 @@ class RealTracer:
             self._snap("done", msg, concept=concept,
                        look=(f"④ 힙 — {task._label} DONE (카드가 흐려짐)",
                              "③ 셀렉터 장부 — 이 연결의 소켓이 정리되면 행도 사라진다"),
-                       skip=4)
+                       subject=task._label, skip=4)
         else:
             waiter = _short(getattr(task, "_fut_waiter", None), 60)
             mark = self._mark(task.get_coro())
             loc = self._floc(*mark) if mark else None
             self._snap("suspend",
-                       f"Task({task._label})가 await 지점에서 프레임을 내려놓았다"
-                       + (f" — 책갈피 {loc}" if loc else "") +
-                       f". 지금 기다리는 것: {waiter}",
+                       f"Task({task._label}) 중단"
+                       + (f" — 책갈피 {loc}." if loc else " —") +
+                       f" await 지점에서 프레임을 내려놓았다. 지금 기다리는 것: {waiter}",
+                       subject=task._label,
                        concept=(
                            (f"{loc}의 await에서 프레임이 통째로 내려갔다. " if loc else "") +
                            "동기 코드였다면 이 줄에서 스레드 전체가 블로킹됐겠지만, "
@@ -432,8 +466,9 @@ class RealTracer:
         doc = _FUNC_DOCS[code.co_qualname]
         loc = self._floc(fi, code.co_firstlineno)
         self._snap("call",
-                   f"{code.co_qualname}(...) 진입 — {loc}. "
-                   f"Task({self.current._label})의 실행이 이 함수로 들어왔다.",
+                   f"Task({self.current._label}) → {code.co_qualname}(...) 진입 — {loc}. "
+                   f"실행이 이 함수로 들어왔다.",
+                   subject=self.current._label, callee=code.co_qualname,
                    concept=doc[0],
                    look=(f"① 소스 — 탭이 {Path(self.src_paths[fi]).name}로 자동 전환, "
                          f"{loc} 하이라이트",
@@ -449,7 +484,83 @@ class RealTracer:
                             "태스크 하나일 뿐이다 — open_connection/write/read 전부 진짜다."),
                    look=("⑤ 타임라인 — 방금 항목에 ✓",
                          "② 콜 스택 — driver(check) 코루틴이 실행 중"),
-                   skip=4)
+                   subject="check", skip=4)
+
+
+# ================================================================ 이야기 판정
+def _finalize(steps):
+    """각 스텝에 story(이야기 스텝 여부)와 chapter(0~4)를 붙인다.
+
+    story=True — 학습 서사를 이루는 스텝만:
+      · 모든 net 스텝 (각본의 진행)
+      · serve/client_A/client_B의 created/done
+      · call 중 랜드마크만 — ASGI 경계(MiniAPI.__call__)와 사용자 코드(hello/echo).
+        receive/send/_read_body/_respond는 번역 배관이라 전체 모드에서만 보인다
+      · resume/suspend 중 '이야기가 진행되는' 것 — 중단해 있는 동안 이야기 사건이
+        하나도 없는 suspend↔resume 짝(drain 완료 대기, start_server 내부 gather 등)은
+        배관으로 접는다. 취소 전달용 재개도 배관 (done이 이야기를 맡는다)
+      · WAKE 중 관찰 태스크의 '완주 재개'로 곧장 이어지는 것
+    """
+    n = len(steps)
+    sub = [s.get("subject") for s in steps]
+    kind = [s["kind"] for s in steps]
+    story = [False] * n
+
+    for i, s in enumerate(steps):
+        if kind[i] == "net":
+            story[i] = True
+        elif kind[i] in ("created", "done") and sub[i] in _OBS:
+            story[i] = True
+        elif kind[i] == "call" and sub[i] in _OBS and s.get("callee") in _STORY_CALLS:
+            story[i] = True
+
+    def next_of(i, kinds):
+        return next((j for j in range(i + 1, n)
+                     if sub[j] == sub[i] and kind[j] in kinds), None)
+
+    churn = set()                       # 배관성 suspend↔resume 짝
+    for i in range(n):
+        if kind[i] == "suspend" and sub[i] in _OBS:
+            j = next_of(i, ("resume",))
+            if j is not None and not any(story[k] for k in range(i + 1, j)):
+                churn.add(i)
+                churn.add(j)
+
+    big = set()                         # 재개 한 번으로 랜드마크 함수까지 내달리는 재개
+    for i in range(n):
+        if kind[i] == "resume" and sub[i] in _OBS and i not in churn \
+                and not steps[i].get("cancelling"):
+            story[i] = True
+            j = next_of(i, ("suspend", "done"))
+            seg = range(i + 1, j if j is not None else n)
+            if any(kind[k] == "call" and story[k] and sub[k] == sub[i] for k in seg):
+                big.add(i)
+        elif kind[i] == "suspend" and sub[i] in _OBS and i not in churn:
+            story[i] = True
+
+    for i in big:
+        steps[i]["narration"] += (" 요청 전체가 이미 수신 버퍼에 있어, 이번 재개에서 "
+                                  "파싱→라우팅→핸들러→응답 쓰기까지 멈추지 않고 간다.")
+    for i in range(n - 1):
+        if kind[i] == "phase" and steps[i]["phase"] == "WAKE" and (i + 1) in big:
+            story[i] = True
+            steps[i]["narration"] += f" 이 알림이 Task({sub[i + 1]})를 깨운다."
+
+    # 챕터 경계 — 스텝 인덱스가 경계 이상이면 그 챕터
+    def first(pred, start=0):
+        return next((i for i in range(start, n) if pred(i)), n)
+
+    a_created = first(lambda i: kind[i] == "created" and sub[i] == "client_A")
+    b_created = first(lambda i: kind[i] == "created" and sub[i] == "client_B")
+    b_susp = first(lambda i: kind[i] == "suspend" and sub[i] == "client_B", b_created)
+    b_run = first(lambda i: kind[i] == "resume" and sub[i] == "client_B", b_susp)
+    b_done = first(lambda i: kind[i] == "done" and sub[i] == "client_B")
+    a_final = first(lambda i: kind[i] == "resume" and sub[i] == "client_A", b_done)
+    bounds = [0, a_created, b_created, b_run, a_final]
+
+    for i in range(n):
+        steps[i]["story"] = story[i]
+        steps[i]["chapter"] = max(c for c, b in enumerate(bounds) if i >= b)
 
 
 # ================================================================ 실행기
@@ -537,6 +648,8 @@ def build_real_trace(weblab_pkg, req_a, req_b, expected_a, expected_b):
     assert responses["A"] == expected_a, f"A(/hello) 응답 불일치: {responses['A']!r}"
     assert responses["B"] == expected_b, f"B(/echo) 응답 불일치: {responses['B']!r}"
 
+    _finalize(tracer.steps)
+
     files = [{"name": f"demos/weblab/{Path(p).name}",
               "lines": Path(p).read_text(encoding="utf-8").splitlines()}
              for p in src_files]
@@ -557,5 +670,6 @@ def build_real_trace(weblab_pkg, req_a, req_b, expected_a, expected_b):
             "T=1 서버 기동(listen)", "T=2 A 접속", "T=3 A 요청라인만 전송",
             "T=4 B 접속", "T=5 B 요청 전체 전송", "T=6 B 응답 완료(먼저!)",
             "T=7 A 나머지 전송", "T=8 A 응답 완료 → 서버 취소"])],
+        "chapters": _CHAPTERS,
         "steps": tracer.steps,
     }, responses

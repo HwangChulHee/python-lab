@@ -59,9 +59,14 @@ def main():
     assert b_done < a_done, "B가 먼저 끝나야 하는데 순서가 다릅니다"
     print("검증 2 OK — 나중에 접속한 client_B가 client_A보다 먼저 완료")
 
+    story_n = sum(1 for s in trace["steps"] if s["story"])
+    assert story_n <= 30, f"이야기 스텝이 {story_n}개 — 30개를 넘었습니다"
+    print(f"검증 3 OK — 이야기 모드 {story_n}스텝 (≤30), 전체 {len(trace['steps'])}스텝")
+
     out = Path(args.out)
     out.write_text(viewer.build_html(trace), encoding="utf-8")
-    print(f"\n생성 완료 → {out}  (스텝 {len(trace['steps'])}개, 완료 사건 {len(done_order)}건)")
+    print(f"\n생성 완료 → {out}  (이야기 {story_n} / 전체 {len(trace['steps'])}스텝, "
+          f"완료 사건 {len(done_order)}건)")
 
 
 if __name__ == "__main__":
