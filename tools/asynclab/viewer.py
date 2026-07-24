@@ -1,14 +1,15 @@
 """
 viewer.py — 트레이스(dict) → 단일 자족 HTML 문자열
 
-pvmlab viewer의 시각 언어를 따른다: 같은 CSS 변수, 카드형 패널, ←/→ 스테핑,
-내레이션 문장. 6패널 그리드:
+pvmlab viewer의 시각 언어를 따른다: 같은 CSS 변수, 카드형 패널, ←/→ 스테핑.
+가독성 장치 세 가지:
+  · 내레이션은 상단 전폭 '스토리' 띠 — 키워드(Task/fd/줄/페이즈)를 자동 강조
+  · 태스크별 고정 색 (serve=보라, client_A=파랑, client_B=초록) — 책갈피·콜 스택·
+    준비큐·장부·힙 카드 어디서든 같은 색이면 같은 손님이다
+  · 직전 스텝과 달라진 코루틴 카드에 플래시 표시
 
-  ① 소스 코드      ② 콜 스택         ③ 이벤트 루프 내부 (심장)
-  ④ 힙            ⑤ 네트워크 타임라인  ⑥ 내레이션
-
-한 스텝 = 이벤트 루프의 사건 하나. 외부 리소스 0 — 트레이스 JSON을 __DATA__에
-박아 하나의 HTML로 만든다.
+패널: ① 소스 ② 콜 스택 ③ 이벤트 루프 내부 / ④ 힙 ⑤ 네트워크 타임라인 ⑥ 읽는 법.
+한 스텝 = 이벤트 루프의 사건 하나. 외부 리소스 0 — 트레이스 JSON을 __DATA__에 박는다.
 """
 
 import json
@@ -27,15 +28,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .wrap { max-width:1560px; margin:0 auto; }
   h1 { font-size:19px; font-weight:600; margin-bottom:3px; }
   .sub { font-size:13.5px; color:var(--sub); margin-bottom:12px; }
-  .progress { height:4px; background:var(--line); border-radius:2px; margin-bottom:14px; }
+  .progress { height:4px; background:var(--line); border-radius:2px; margin-bottom:12px; }
   .progress i { display:block; height:100%; background:var(--acc); border-radius:2px; }
-  .grid { display:grid; grid-template-columns:1.05fr 0.95fr 1.15fr; gap:13px;
-          align-items:start; }
+
+  /* 스토리 띠 — 이번 스텝에서 일어난 일 (가장 먼저 읽는 곳) */
+  .story { display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center;
+           background:var(--card); border:1px solid var(--line); border-left:5px solid var(--acc);
+           border-radius:10px; padding:13px 16px; margin-bottom:13px; }
+  .story.k-phase   { border-left-color:var(--sel); }
+  .story.k-resume  { border-left-color:var(--run); }
+  .story.k-suspend { border-left-color:var(--warn); }
+  .story.k-created { border-left-color:#8a63c9; }
+  .story.k-done    { border-left-color:#8b897f; }
+  .story-meta { text-align:center; min-width:86px; }
+  .kbadge { display:block; font-size:11px; font-weight:700; border-radius:6px; padding:2px 8px; }
+  .kbadge.phase { color:var(--sel); background:var(--selbg); }
+  .kbadge.resume { color:var(--run); background:var(--runbg); }
+  .kbadge.suspend { color:var(--warn); background:var(--warnbg); }
+  .kbadge.created { color:#6a4bb0; background:#f0e9fb; }
+  .kbadge.done { color:#8b897f; background:#eeece5; }
+  .kbadge.loop { color:#1c4d94; background:#d7e5f8; }
+  .story-meta .tp { font:11.5px ui-monospace,monospace; color:var(--mut); margin-top:4px; display:block; }
+  .story-text { font-size:15px; line-height:1.75; }
+  .story-text code { font:600 13px ui-monospace,Consolas,monospace; border-radius:5px;
+                     padding:1px 6px; background:var(--bg); color:var(--sub); white-space:nowrap; }
+  .story-text code.kw { color:#1c4d94; background:var(--accbg); }
+  .keyhint { font-size:11.5px; color:var(--mut); white-space:nowrap; }
+
+  .grid { display:grid; grid-template-columns:1.05fr 0.95fr 1.15fr; gap:13px; align-items:start; }
   @media (max-width:1100px) { .grid { grid-template-columns:1fr; } }
   .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
            padding:12px; min-width:0; }
   .panel h2 { font-size:12px; font-weight:500; color:var(--mut); margin-bottom:8px; }
-  .scroll { max-height:46vh; overflow:auto; }
+  .scroll { max-height:44vh; overflow:auto; }
+  @keyframes flash { from { box-shadow:0 0 0 3px #e6c98a; } to { box-shadow:0 0 0 3px transparent; } }
+  .chg { animation:flash .9s ease-out; }
 
   /* ① 소스 */
   .src-row { display:flex; gap:10px; padding:1.5px 8px; border-radius:6px;
@@ -43,23 +70,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
              white-space:pre; }
   .src-row .no { color:var(--mut); min-width:24px; text-align:right; user-select:none; }
   .src-row.on { background:var(--warnbg); color:var(--warn); font-weight:600; }
-  .src-row.bmk { background:var(--selbg); }
-  .bm { font:10.5px system-ui; color:var(--sel); background:#dfe9f6; border-radius:5px;
-        padding:0 6px; margin-left:8px; align-self:center; white-space:nowrap; }
+  .bm { font:10.5px system-ui; border-radius:5px; padding:0 6px; margin-left:8px;
+        align-self:center; white-space:nowrap; }
   .bm::before { content:"📑 "; }
 
   /* ② 콜 스택 */
   .stk-note { font-size:11px; color:var(--mut); margin-bottom:7px; }
   .frame { border:1px solid var(--line); border-radius:8px; padding:7px 11px;
            margin-bottom:7px; font:13px ui-monospace,Consolas,monospace; color:var(--sub); }
-  .frame.coro { border-color:var(--acc); background:var(--accbg); color:#1c4d94; font-weight:600; }
+  .frame.coro { font-weight:600; }
   .frame.coro.infra { opacity:.62; font-weight:400; border-style:dashed; }
   .frame.loopfr { border:2px solid var(--warn); background:var(--warnbg); color:var(--warn); }
   .frame .tag { font:10.5px system-ui; border-radius:5px; padding:0 6px; margin-left:7px;
                 font-weight:400; }
   .frame .tag.res { color:var(--warn); background:#f3e3bd; }
-  .frame .tag.who { color:#1c4d94; background:#d7e5f8; }
-  .frame .tag.ln { color:var(--mut); background:var(--bg); }
+  .frame .tag.ln { color:var(--mut); background:rgba(255,255,255,.65); }
   .cpu0 { border:1px dashed var(--sel); background:var(--selbg); color:var(--sel);
           border-radius:8px; padding:7px 11px; margin-bottom:7px; font-size:12.5px;
           text-align:center; }
@@ -74,9 +99,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .sec { font-size:11px; color:var(--mut); margin:10px 0 5px; font-weight:600; }
   .sec b { color:var(--sub); }
   .qrow { display:flex; gap:6px; flex-wrap:wrap; }
-  .cb { padding:2px 9px; border-radius:6px; border:1px solid #bcd3f0; background:var(--accbg);
-        color:#1c4d94; font:12px ui-monospace,monospace; }
-  .cb.exec { border-color:var(--run); background:var(--runbg); color:var(--run); font-weight:700; }
+  .cb { padding:2px 9px; border-radius:6px; border:1px solid var(--line);
+        font:12px ui-monospace,monospace; background:var(--card); color:var(--sub); }
+  .cb.exec { font-weight:700; }
   .empty { font-size:12px; color:var(--mut); padding:2px 0; }
   .wrow { display:grid; grid-template-columns:auto 1fr; gap:8px; padding:4px 9px;
           border:1px solid var(--line); border-radius:7px; margin-bottom:5px;
@@ -94,10 +119,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .fchip { display:inline-block; font:12px ui-monospace,monospace; border:1px solid var(--line);
            border-radius:6px; padding:1px 8px; margin:0 5px 5px 0; color:var(--sub);
            background:var(--card); cursor:help; }
-  .hcard.coro { border-color:#c9a227; background:#fdf8ec; }
-  .hcard.coro.RUNNING { border-color:var(--run); background:var(--runbg); }
-  .hcard.coro.CREATED { border-color:#7ea3d6; background:#eef4fb; }
-  .hcard.coro.DONE { opacity:.5; border-color:var(--line); background:var(--card); }
+  .hcard.coro { border-left-width:5px; background:var(--card); }
+  .hcard.coro.DONE { opacity:.5; }
   .stbadge { font-size:10.5px; font-weight:600; border-radius:5px; padding:0 6px; margin-left:6px; }
   .stbadge.SUSPENDED { color:#8a6d18; background:#faf0da; }
   .stbadge.CREATED { color:#2f6fce; background:#e9f1fc; }
@@ -118,17 +141,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .clockbox { font-size:12.5px; color:var(--sub); margin-bottom:8px; }
   .clockbox b { font-family:ui-monospace,monospace; color:var(--acc); }
 
-  /* ⑥ 내레이션 */
-  .desc { padding:12px 14px; border:1px solid #bcd3f0; background:var(--accbg);
-          border-radius:10px; color:#1c4d94; min-height:110px; font-size:14px; }
-  .kbadge { display:inline-block; font-size:10.5px; font-weight:600; border-radius:5px;
-            padding:1px 7px; margin-bottom:7px; }
-  .kbadge.phase { color:var(--sel); background:var(--selbg); }
-  .kbadge.resume { color:var(--run); background:var(--runbg); }
-  .kbadge.suspend { color:var(--warn); background:var(--warnbg); }
-  .kbadge.created { color:#6a4bb0; background:#f0e9fb; }
-  .kbadge.done { color:#8b897f; background:#eeece5; }
-  .kbadge.loop { color:#1c4d94; background:#d7e5f8; }
+  /* ⑥ 읽는 법 */
+  .guide { font-size:12.5px; color:var(--sub); line-height:1.9; }
+  .guide .row { margin-bottom:2px; }
+  .guide code { font:12px ui-monospace,monospace; background:var(--bg); border-radius:5px; padding:0 5px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px;
+         vertical-align:-1px; }
 
   .nav { display:flex; align-items:center; gap:12px; margin-top:14px; }
   button { font:inherit; padding:8px 18px; border:1px solid var(--line);
@@ -140,6 +158,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <h1>asynclab — 코루틴·이벤트 루프</h1>
 <div class="sub" id="subtitle"></div>
 <div class="progress"><i id="prog"></i></div>
+<div class="story" id="story">
+  <div class="story-meta"><span class="kbadge" id="kind"></span><span class="tp" id="tp"></span></div>
+  <div class="story-text" id="desc"></div>
+  <div class="keyhint">←/→ 키로<br>한 사건씩</div>
+</div>
 <div class="grid">
   <div class="panel"><h2>① 소스 — demos/mini_web.py (📑 = 보관된 프레임의 책갈피)</h2>
     <div class="scroll" id="src"></div></div>
@@ -150,8 +173,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="scroll" id="heap"></div></div>
   <div class="panel"><h2>⑤ 네트워크 타임라인 (각본)</h2>
     <div class="clockbox">가상 시계 <b id="clock"></b></div><div class="net" id="net"></div></div>
-  <div class="panel"><h2>⑥ 내레이션 — 이번 스텝에서 일어난 일</h2>
-    <div id="kind"></div><div class="desc" id="desc"></div></div>
+  <div class="panel"><h2>⑥ 읽는 법</h2><div class="guide" id="guide"></div></div>
 </div>
 <div class="nav">
   <button id="prev">← 이전</button><button id="next">다음 →</button>
@@ -169,20 +191,55 @@ $("slider").max = T.steps.length - 1;
 const KIND_LABEL = { phase:"페이즈", resume:"코루틴 재개", suspend:"프레임 보관",
                      created:"코루틴 생성", done:"코루틴 종료", loop:"루프" };
 
+/* 태스크별 고정 색 — 어느 패널에서든 같은 색 = 같은 손님 */
+const LAB = {
+  serve:    { fg:"#6a4bb0", bg:"#f0e9fb", bd:"#c9b8e6" },
+  client_A: { fg:"#1c4d94", bg:"#e9f1fc", bd:"#9cc2ea" },
+  client_B: { fg:"#2f7a4a", bg:"#e6f4ec", bd:"#a9cdb5" },
+};
+const lab = l => LAB[l] || { fg:"var(--sub)", bg:"var(--bg)", bd:"var(--line)" };
+const labStyle = l => `color:${lab(l).fg};background:${lab(l).bg};border-color:${lab(l).bd}`;
+
+/* 내레이션 키워드 강조 — 한 번의 정규식 패스로 겹침 없이 처리 */
+const NARR_RE = /(Task\((?:serve|client_A|client_B)\)\.step)|(client_A|client_B)|(fd \d+ \([^)]+\)|fd \d+)|(줄 \d+)|(SELECT|WAKE|RUN(?=[ \s—,.]|$)|StopIteration|coro\.send\(None\)|call_soon|run_until_complete\(\)|cr_frame ?= ?None|CPU 0%|SUSPENDED|CREATED|DONE)/g;
+function fmtNarr(text) {
+  return esc(text).replace(NARR_RE, (m, task, label, fd, line, kw) => {
+    if (task) {
+      const l = task.slice(5, -6);                 // "Task(" ... ").step"
+      return `<code style="${labStyle(l)}">${m}</code>`;
+    }
+    if (label) return `<code style="${labStyle(label)}">${m}</code>`;
+    if (kw) return `<code class="kw">${m}</code>`;
+    return `<code>${m}</code>`;                    // fd n / 줄 n
+  });
+}
+
+/* 준비큐·장부 콜백 표기에서 태스크 라벨을 뽑아 색을 입힌다 */
+const cbOwner = c => (c.match(/^Task\((.+)\)\.step$/) || [])[1];
+
 function render() {
   const s = T.steps[i];
+  const prev = i > 0 ? T.steps[i - 1] : null;
   $("prog").style.width = (i / (T.steps.length - 1) * 100) + "%";
 
-  // ① 소스 — 하이라이트 + 책갈피
-  const marks = {};                        // line → [labels]
+  // 스토리 띠
+  $("story").className = "story k-" + s.kind;
+  $("kind").className = "kbadge " + s.kind;
+  $("kind").textContent = KIND_LABEL[s.kind] || s.kind;
+  $("tp").textContent = `T=${s.clock} · ${s.phase}`;
+  $("desc").innerHTML = fmtNarr(s.narration);
+
+  // ① 소스 — 하이라이트 + 책갈피(태스크 색)
+  const marks = {};                                // line → [labels]
   s.src.bookmarks.forEach(b => (marks[b.line] = marks[b.line] || []).push(b.label));
   $("src").innerHTML = T.src.map((ln, n0) => {
     const n = n0 + 1;
-    const cls = n === s.src.hi ? "on" : (marks[n] ? "bmk" : "");
-    const bms = (marks[n] || []).map(l => `<span class="bm">${esc(l)}</span>`).join("");
-    return `<div class="src-row ${cls}"><span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
+    const bms = (marks[n] || []).map(l => `<span class="bm" style="${labStyle(l)}">${esc(l)}</span>`).join("");
+    const bg = marks[n] ? `background:${lab(marks[n][0]).bg}` : "";
+    return `<div class="src-row ${n === s.src.hi ? "on" : ""}" style="${n === s.src.hi ? "" : bg}">` +
+           `<span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
   }).join("");
-  const hiEl = $("src").querySelector(".on") || $("src").querySelector(".bmk");
+  const hiEl = $("src").querySelector(".on") || $("src").querySelector(".bm");
   if (hiEl) hiEl.scrollIntoView({ block:"center" });
 
   // ② 콜 스택 — 배열은 바닥→꼭대기, 표시는 꼭대기부터
@@ -190,9 +247,10 @@ function render() {
     if (f.kind === "loop")
       return `<div class="frame loopfr">${esc(f.name)}<span class="tag res">상주</span></div>`;
     if (f.kind === "coro") {
+      const c = lab(f.label);
       const ln = f.line ? `<span class="tag ln">줄 ${f.line}</span>` : "";
-      return `<div class="frame coro ${f.infra ? "infra" : ""}">${esc(f.name)}` +
-             `<span class="tag who">${esc(f.label)}</span>${ln}</div>`;
+      return `<div class="frame coro ${f.infra ? "infra" : ""}" style="border-color:${c.bd};background:${c.bg};color:${c.fg}">` +
+             `${esc(f.name)}<span class="tag" style="${labStyle(f.label)}">${esc(f.label)}</span>${ln}</div>`;
     }
     return `<div class="frame">${esc(f.name)}</div>`;
   });
@@ -204,8 +262,10 @@ function render() {
   const phases = ["SELECT","WAKE","RUN"].map(p =>
     `<div class="ph ${p} ${p === s.phase ? "on " + p : ""}">${p}${
       p==="SELECT"?" · 잠듦":p==="WAKE"?" · 수거":" · 소진"}</div>`).join("");
-  const running = s.running ? `<span class="cb exec">▶ Task(${esc(s.running)}).step 실행 중</span>` : "";
-  const ready = s.loop.ready.map(c => `<span class="cb">${esc(c)}</span>`).join("");
+  const cbChip = (c, extra) =>
+    `<span class="cb ${extra || ""}" style="${labStyle(cbOwner(c))}">${esc(c)}</span>`;
+  const running = s.running ? cbChip(`Task(${s.running}).step`, "exec").replace("</span>", " ▶ 실행 중</span>") : "";
+  const ready = s.loop.ready.map(c => cbChip(c)).join("");
   const watch = s.loop.watch.map(w =>
     `<div class="wrow ${w.notified ? "hot" : ""}"><span class="fd">fd ${w.fd} (${esc(w.name)})</span>` +
     `<span>→ ${esc(w.cb)} 깨우기${w.notified ? " ← OS 알림!" : ""}</span></div>`).join("");
@@ -220,18 +280,24 @@ function render() {
     `<div class="sec">타이머 힙 <b>timers</b> — (깨울 시각, 콜백)</div>` + timers;
 
   // ④ 힙 — 코드 객체(공유) / 함수 객체 / 코루틴 객체(보관된 프레임)
+  const prevCoro = {};
+  if (prev) prev.heap.coros.forEach(c => prevCoro[c.label] = c);
   const codes = s.heap.codes.map(c =>
     `<div class="hcard code"><span class="nm">${esc(c.qualname)}</span>` +
     `<span class="codelink">코드 객체 · 줄 ${c.firstlineno}~</span>` +
-    `<div class="share">↖ ${c.shared.map(esc).join(" · ")} ${c.shared.length > 1 ? "가 공유 — 악보는 하나, 무대는 각자" : ""}</div></div>`).join("");
+    `<div class="share">↖ ${c.shared.map(l => `<span style="color:${lab(l).fg}">${esc(l)}</span>`).join(" · ")}` +
+    `${c.shared.length > 1 ? " 가 공유 — 악보는 하나, 무대는 각자" : ""}</div></div>`).join("");
   const funcs = s.heap.funcs.map(f =>
     `<span class="fchip" title="${esc(f.note)}">${esc(f.name)}</span>`).join("");
   const coros = s.heap.coros.map(c => {
+    const p = prevCoro[c.label];
+    const changed = p && (p.state !== c.state || p.line !== c.line);
     const fr = c.line !== null
       ? `cr_frame.f_lineno = <b>${c.line}</b> (멈춘 줄 = 이 손님의 상태)`
       : `cr_frame = <b>None</b> — 프레임 소멸`;
     const lo = c.locals.map(kv => `<div>${esc(kv[0])} = ${esc(kv[1])}</div>`).join("");
-    return `<div class="hcard coro ${c.state}"><span class="nm">${esc(c.label)}</span>` +
+    return `<div class="hcard coro ${c.state} ${changed ? "chg" : ""}" style="border-left-color:${lab(c.label).fg}">` +
+      `<span class="nm" style="color:${lab(c.label).fg}">${esc(c.label)}</span>` +
       `<span class="stbadge ${c.state}">${c.state}</span>` +
       `<span class="codelink">코드 → ${esc(c.code)}</span>` +
       `<div class="meta">${fr}</div>` +
@@ -244,23 +310,31 @@ function render() {
 
   // ⑤ 네트워크 타임라인
   $("clock").textContent = "T=" + s.clock;
-  $("net").innerHTML = T.script.map(e => {
-    const used = s.net.consumed > T.script.indexOf(e);
+  $("net").innerHTML = T.script.map((e, n) => {
+    const used = s.net.consumed > n;
     const now = used && e.t === s.clock;
     return `<div class="ev ${used ? "used" : ""} ${now ? "now" : ""}">` +
       `<span class="chk">${used ? "✓" : "·"}</span><span>${esc(e.desc)}</span></div>`;
   }).join("");
-
-  // ⑥ 내레이션
-  $("kind").innerHTML = `<span class="kbadge ${s.kind}">${KIND_LABEL[s.kind] || s.kind}</span>` +
-    ` <span style="font-size:11px;color:var(--mut)">T=${s.clock} · ${s.phase}</span>`;
-  $("desc").textContent = s.narration;
 
   $("slider").value = i;
   $("pos").textContent = i + " / " + (T.steps.length - 1);
   $("prev").disabled = i === 0;
   $("next").disabled = i === T.steps.length - 1;
 }
+
+$("guide").innerHTML = [
+  `<div class="row"><span class="dot" style="background:${LAB.serve.bd}"></span>serve` +
+  ` <span class="dot" style="background:${LAB.client_A.bd}"></span>client_A` +
+  ` <span class="dot" style="background:${LAB.client_B.bd}"></span>client_B` +
+  ` — 어느 패널에서든 같은 색 = 같은 태스크</div>`,
+  `<div class="row"><b>SELECT → WAKE → RUN</b> — 루프 while 한 바퀴. 잠들고, 장부 보고 깨우고, 준비큐를 소진한다</div>`,
+  `<div class="row">📑 책갈피 — 보관된 프레임이 멈춘 줄. 멈춘 줄이 곧 그 연결의 상태다</div>`,
+  `<div class="row"><code>Task(x).step</code> — 준비큐에 들어가는 건 코루틴이 아니라 이 콜백(바운드 메서드)</div>`,
+  `<div class="row">노란 테두리 플래시 — 직전 스텝과 달라진 코루틴 카드</div>`,
+  `<div class="row">점선 프레임 — 엔진(channel.py) 내부라 소스 패널에 줄 표시가 없는 프레임</div>`,
+].join("");
+
 $("next").onclick = () => { if (i < T.steps.length - 1) { i++; render(); } };
 $("prev").onclick = () => { if (i > 0) { i--; render(); } };
 $("slider").oninput = e => { i = +e.target.value; render(); };
