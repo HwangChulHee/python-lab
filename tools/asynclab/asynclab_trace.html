@@ -39,8 +39,12 @@
   .story-text code.kw { color:#1c4d94; background:var(--accbg); }
   .keyhint { font-size:11.5px; color:var(--mut); white-space:nowrap; }
 
-  .grid { display:grid; grid-template-columns:1.05fr 0.95fr 1.15fr; gap:13px; align-items:start; }
-  @media (max-width:1100px) { .grid { grid-template-columns:1fr; } }
+  .grid { display:grid; grid-template-columns:1.2fr 0.9fr 1.1fr; gap:13px; align-items:start; }
+  /* 소스는 왼쪽 열 전체(2행)를 차지하고 화면에 붙어 따라온다 — 스크롤 최소화 */
+  .srcpanel { grid-row:1 / span 2; position:sticky; top:12px; }
+  .fullw { grid-column:1 / -1; }
+  @media (max-width:1100px) { .grid { grid-template-columns:1fr; }
+    .srcpanel { grid-row:auto; position:static; } .fullw { grid-column:auto; } }
   .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
            padding:12px; min-width:0; }
   .panel h2 { font-size:12px; font-weight:500; color:var(--mut); margin-bottom:8px; }
@@ -48,11 +52,13 @@
   @keyframes flash { from { box-shadow:0 0 0 3px #e6c98a; } to { box-shadow:0 0 0 3px transparent; } }
   .chg { animation:flash .9s ease-out; }
 
-  /* ① 소스 */
-  .src-row { display:flex; gap:10px; padding:1.5px 8px; border-radius:6px;
-             font:12.5px/1.6 ui-monospace,Consolas,monospace; color:var(--sub);
+  /* ① 소스 — 크게, 세로로 최대한 */
+  #src { max-height:calc(100vh - 210px); overflow:auto; }
+  .src-row { display:flex; gap:11px; padding:1.5px 8px; border-radius:6px;
+             font:13.5px/1.62 ui-monospace,Consolas,monospace; color:var(--sub);
              white-space:pre; }
-  .src-row .no { color:var(--mut); min-width:24px; text-align:right; user-select:none; }
+  .src-row .no { color:var(--mut); min-width:26px; text-align:right; user-select:none; }
+  .src-row.doc { opacity:.5; }             /* 모듈 docstring은 옅게 — 코드에 집중 */
   .src-row.on { background:var(--warnbg); color:var(--warn); font-weight:600; }
   .bm { font:10.5px system-ui; border-radius:5px; padding:0 6px; margin-left:8px;
         align-self:center; white-space:nowrap; }
@@ -126,7 +132,9 @@
   .clockbox b { font-family:ui-monospace,monospace; color:var(--acc); }
 
   /* ⑥ 읽는 법 */
-  .guide { font-size:12.5px; color:var(--sub); line-height:1.9; }
+  .guide { font-size:12.5px; color:var(--sub); line-height:1.9;
+           display:grid; grid-template-columns:1fr 1fr; gap:0 26px; }
+  @media (max-width:1100px) { .guide { grid-template-columns:1fr; } }
   .guide .row { margin-bottom:2px; }
   .guide code { font:12px ui-monospace,monospace; background:var(--bg); border-radius:5px; padding:0 5px; }
   .dot { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px;
@@ -148,8 +156,8 @@
   <div class="keyhint">←/→ 키로<br>한 사건씩</div>
 </div>
 <div class="grid">
-  <div class="panel"><h2>① 소스 — demos/mini_web.py (📑 = 보관된 프레임의 책갈피)</h2>
-    <div class="scroll" id="src"></div></div>
+  <div class="panel srcpanel"><h2>① 소스 — demos/mini_web.py (📑 = 보관된 프레임의 책갈피)</h2>
+    <div id="src"></div></div>
   <div class="panel"><h2>② 콜 스택 (아래가 바닥 — 루프 프레임은 상주)</h2>
     <div id="stack"></div></div>
   <div class="panel"><h2>③ 이벤트 루프 내부</h2><div class="scroll" id="loop"></div></div>
@@ -157,7 +165,7 @@
     <div class="scroll" id="heap"></div></div>
   <div class="panel"><h2>⑤ 네트워크 타임라인 (각본)</h2>
     <div class="clockbox">가상 시계 <b id="clock"></b></div><div class="net" id="net"></div></div>
-  <div class="panel"><h2>⑥ 읽는 법</h2><div class="guide" id="guide"></div></div>
+  <div class="panel fullw"><h2>⑥ 읽는 법</h2><div class="guide" id="guide"></div></div>
 </div>
 <div class="nav">
   <button id="prev">← 이전</button><button id="next">다음 →</button>
@@ -201,6 +209,22 @@ function fmtNarr(text) {
 /* 준비큐·장부 콜백 표기에서 태스크 라벨을 뽑아 색을 입힌다 */
 const cbOwner = c => (c.match(/^Task\((.+)\)\.step$/) || [])[1];
 
+/* 모듈 docstring 줄들(1행이 \"\"\"로 시작 ~ 닫는 \"\"\")은 옅게 표시한다 */
+const DOC = new Set();
+if ((T.src[0] || "").startsWith('\"\"\"')) {
+  DOC.add(1);
+  for (let n = 1; n < T.src.length; n++) {
+    DOC.add(n + 1);
+    if (T.src[n].includes('\"\"\"')) break;
+  }
+}
+
+/* 컨테이너 안에서만 세로 스크롤 — 페이지 전체가 딸려 움직이지 않게 */
+function centerIn(box, el) {
+  if (!box || !el) return;
+  box.scrollTop = el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2;
+}
+
 function render() {
   const s = T.steps[i];
   const prev = i > 0 ? T.steps[i - 1] : null;
@@ -220,11 +244,11 @@ function render() {
     const n = n0 + 1;
     const bms = (marks[n] || []).map(l => `<span class="bm" style="${labStyle(l)}">${esc(l)}</span>`).join("");
     const bg = marks[n] ? `background:${lab(marks[n][0]).bg}` : "";
-    return `<div class="src-row ${n === s.src.hi ? "on" : ""}" style="${n === s.src.hi ? "" : bg}">` +
+    const cls = (n === s.src.hi ? "on" : "") + (DOC.has(n) ? " doc" : "");
+    return `<div class="src-row ${cls}" style="${n === s.src.hi ? "" : bg}">` +
            `<span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
   }).join("");
-  const hiEl = $("src").querySelector(".on") || $("src").querySelector(".bm");
-  if (hiEl) hiEl.scrollIntoView({ block:"center" });
+  centerIn($("src"), $("src").querySelector(".on") || $("src").querySelector(".bm"));
 
   // ② 콜 스택 — 배열은 바닥→꼭대기, 표시는 꼭대기부터
   const frames = s.stack.slice().reverse().map(f => {
