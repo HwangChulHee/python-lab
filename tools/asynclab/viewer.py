@@ -50,6 +50,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .kbadge.loop { color:#1c4d94; background:#d7e5f8; }
   .kbadge.net { color:#2f8f4e; background:#e6f4ec; }
   .story.k-net { border-left-color:#2f8f4e; }
+  .kbadge.call { color:#6a4bb0; background:#f0e9fb; }
+  .story.k-call { border-left-color:#8a63c9; }
   .story-meta .tp { font:11.5px ui-monospace,monospace; color:var(--mut); margin-top:4px; display:block; }
   .story-text { font-size:15px; line-height:1.75; }
   .story-text code, .concept code, .look code {
@@ -91,10 +93,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
              white-space:pre; }
   .src-row .no { color:var(--mut); min-width:26px; text-align:right; user-select:none; }
   .src-row.doc { opacity:.5; }             /* 모듈 docstring은 옅게 — 코드에 집중 */
-  .src-file { position:sticky; top:0; font:600 12px ui-monospace,monospace; color:#6a4bb0;
-              background:#f2ecfb; border:1px solid #d9cbf0; border-radius:7px;
-              padding:4px 10px; margin:10px 0 6px; z-index:2; }
-  .src-file:first-child { margin-top:0; }
+  /* 파일 탭 — 한 번에 한 파일. 스텝 이동 시 실행 위치의 파일로 자동 전환 */
+  .ftabs { display:flex; gap:6px; margin-bottom:9px; flex-wrap:wrap; }
+  .ftab { display:flex; align-items:center; gap:5px; padding:4px 12px; border-radius:8px;
+          border:1px solid var(--line); background:var(--bg); cursor:pointer;
+          font:12px ui-monospace,Consolas,monospace; color:var(--sub); user-select:none; }
+  .ftab.on { border-color:#6a4bb0; background:#f2ecfb; color:#6a4bb0; font-weight:700; }
+  .bdot { display:inline-block; width:9px; height:9px; border-radius:50%; }
+  .bdot.hi { background:var(--warn); box-shadow:0 0 0 2px var(--warnbg); }
   .src-row.on { background:var(--warnbg); color:var(--warn); font-weight:600; }
   .bm { font:10.5px system-ui; border-radius:5px; padding:0 6px; margin-left:8px;
         align-self:center; white-space:nowrap; }
@@ -198,9 +204,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="look" id="look"></div>
 </div>
 <div class="grid">
-  <div class="panel srcpanel"><h2>① 소스 — weblab 3파일 그대로 (📑 = 보관된 프레임의 책갈피)</h2>
+  <div class="panel srcpanel"><h2>① 소스 — weblab 3파일 그대로 (탭 = 파일, ● = 지금 실행 위치 / 색점 = 책갈피)</h2>
     <div class="boot"><div class="boot-h">호출부 — run.py가 이 코드를 이렇게 물렸다 (verify.py check()와 동일한 방식)</div>
       <pre id="boot"></pre></div>
+    <div class="ftabs" id="ftabs"></div>
     <div id="src"></div></div>
   <div class="panel"><h2>② 콜 스택 (아래가 바닥 — 루프 프레임은 상주)</h2>
     <div id="stack"></div></div>
@@ -219,6 +226,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script>
 const T = __DATA__;
 let i = 0;
+let curFile = 0;                 // 소스 패널에 지금 펼쳐진 파일 (탭)
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 $("h1").textContent = T.title;
@@ -228,7 +236,7 @@ $("boot").textContent = T.boot.join("\n");
 
 const KIND_LABEL = { phase:"페이즈", resume:"코루틴 재개", suspend:"프레임 보관",
                      created:"Task 생성", done:"코루틴 종료", loop:"루프",
-                     net:"클라이언트" };
+                     net:"클라이언트", call:"함수 진입" };
 
 /* 태스크별 고정 색 — 어느 패널에서든 같은 색 = 같은 손님 */
 const LAB = {
@@ -292,20 +300,28 @@ function render() {
       s.detail.look.map(l => `<div class="lk">· ${fmtNarr(l)}</div>`).join("")
     : "";
 
-  // ① 소스 — 파일별 섹션 + 하이라이트 + 책갈피(태스크 색)
+  // ① 소스 — 파일 탭 하나만 표시. 실행 위치(hi)가 있는 스텝이면 그 파일로 자동 전환
+  if (s.src.hi) curFile = s.src.hi.f;
   const marks = {};                                // "f:line" → [labels]
   s.src.bookmarks.forEach(b => (marks[b.f + ":" + b.line] = marks[b.f + ":" + b.line] || []).push(b.label));
-  $("src").innerHTML = T.files.map((fl, fi) => {
-    const rows = fl.lines.map((ln, n0) => {
-      const n = n0 + 1, key = fi + ":" + n;
-      const on = s.src.hi && s.src.hi.f === fi && s.src.hi.line === n;
-      const bms = (marks[key] || []).map(l => `<span class="bm" style="${labStyle(l)}">${esc(l)}</span>`).join("");
-      const bg = marks[key] ? `background:${lab(marks[key][0]).bg}` : "";
-      const cls = (on ? "on" : "") + (DOCS[fi].has(n) ? " doc" : "");
-      return `<div class="src-row ${cls}" style="${on ? "" : bg}">` +
-             `<span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
-    }).join("");
-    return `<div class="src-file">${esc(fl.name)}</div>` + rows;
+  $("ftabs").innerHTML = T.files.map((fl, fi) => {
+    const hiDot = s.src.hi && s.src.hi.f === fi ? `<span class="bdot hi"></span>` : "";
+    const dots = s.src.bookmarks.filter(b => b.f === fi)
+      .map(b => `<span class="bdot" style="background:${lab(b.label).bd}"></span>`).join("");
+    return `<span class="ftab ${fi === curFile ? "on" : ""}" data-f="${fi}">` +
+           `${esc(fl.name.split("/").pop())}${hiDot}${dots}</span>`;
+  }).join("");
+  $("ftabs").querySelectorAll(".ftab").forEach(el =>
+    el.onclick = () => { curFile = +el.dataset.f; render(); });
+  const fl = T.files[curFile];
+  $("src").innerHTML = fl.lines.map((ln, n0) => {
+    const n = n0 + 1, key = curFile + ":" + n;
+    const on = s.src.hi && s.src.hi.f === curFile && s.src.hi.line === n;
+    const bms = (marks[key] || []).map(l => `<span class="bm" style="${labStyle(l)}">${esc(l)}</span>`).join("");
+    const bg = marks[key] ? `background:${lab(marks[key][0]).bg}` : "";
+    const cls = (on ? "on" : "") + (DOCS[curFile].has(n) ? " doc" : "");
+    return `<div class="src-row ${cls}" style="${on ? "" : bg}">` +
+           `<span class="no">${n}</span><span>${esc(ln) || " "}</span>${bms}</div>`;
   }).join("");
   centerIn($("src"), $("src").querySelector(".on") || $("src").querySelector(".bm"));
 

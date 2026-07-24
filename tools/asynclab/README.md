@@ -31,6 +31,11 @@ python run.py                 # 검증 통과 → asynclab_trace.html (←/→ �
 A보다 앞선다. 스텝마다 요약 한 줄 + 쉬운 개념 해설 + "지금 볼 곳"(어느 패널의
 어떤 데이터) 목록이 붙는다.
 
+소스 패널은 파일 탭(3파일)이고, ←/→로 스텝을 넘기면 지금 실행 중인 위치의
+파일로 자동 전환된다. `MiniAPI.__call__`·`hello`/`echo`처럼 await 없이 즉시
+끝나는 함수는 보관 스냅샷에 잡히지 않으므로, `sys.monitoring`(PY_START)으로
+함수 '진입' 사건을 따로 잡아 세 파일의 실행 경로 전체를 스텝으로 보여준다.
+
 주의: 진짜 OS(fd·포트·타이머)를 쓰므로 트레이스 세부는 실행마다 다를 수 있다.
 
 ## 구조
@@ -45,11 +50,15 @@ demos/weblab/             관찰 대상 — metric-lab tools/weblab에서 그대
 viewer.py                 트레이스 → 단일 자족 HTML (6패널, 태스크별 색, 상세 해설)
 ```
 
-## 미니 루프와 진짜의 대응 (pvmlab eventloop.py → asynclab)
+## 세 파일이 각각 보여주는 것
 
-pvmlab `eventloop.py`가 제너레이터+가상 시계로 스케줄링 원리를 보였다면, asynclab은
-진짜 asyncio에서 그 각 부품이 어디에 있는지 보인다: 준비큐=`loop._ready`(Handle),
-장부=셀렉터에 등록된 transport 콜백, 태스크의 신호=튜플이 아니라 `_fut_waiter`
-(Future), 재개=`Task.__step`/`__wakeup`. 미니에서 한 겹이던 "fd → task 깨우기"가
-진짜에서는 "fd → transport._read_ready → StreamReader/Future 완료 → Task.__wakeup"
-릴레이로 두꺼워진 것을 트레이스에서 확인할 수 있다.
+- **mini_server.py** — 서버의 일: 소켓 바이트 → HTTP 파싱 → scope/receive/send 조립
+  → `await app(...)`. `handle_connection`이 await마다 프레임을 내려놓는 것이
+  트레이스의 주인공이고, `await reader.readline()` 한 줄 뒤에 "transport가 바이트를
+  버퍼에 넣고 Future를 완료시켜 Task.__wakeup을 예약하는" 릴레이가 숨어 있다.
+- **mini_framework.py** — 프레임워크의 일: 라우팅 → `_read_body` → 핸들러 호출 →
+  `_respond`. `MiniAPI.__call__` 프레임이 `handle_connection` 위에 얹히는 것이
+  콜 스택에서 ASGI 왕복으로 보인다.
+- **verify.py** — 사용자의 일: `app`/`hello`/`echo` 정의. run.py의 driver가
+  `check()`와 같은 방식(create_task(serve) → sleep(0.2) → open_connection)으로
+  각본을 수행한다.

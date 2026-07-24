@@ -8,8 +8,8 @@ run.py — asynclab 유일한 진입점: weblab 3파일을 '진짜 asyncio'로 �
     mini_framework.py   MiniAPI — ASGI callable
     verify.py           app / hello / echo — 데모 앱 정의를 그대로 import
 
-미니 루프 재현이 아니다. 진짜 asyncio.SelectorEventLoop + 진짜 asyncio.Task +
-진짜 소켓으로 실행하고, 후킹(관찰용)으로 매 사건의 콜 스택·루프 내부를 기록한다.
+진짜 asyncio.SelectorEventLoop + 진짜 asyncio.Task + 진짜 소켓으로 실행하고,
+후킹(관찰용)으로 매 사건의 콜 스택·루프 내부를 기록한다.
 
 검증 (실패하면 HTML을 만들지 않는다):
   1. 응답 정합 — A(GET /hello)·B(POST /echo)의 응답 바이트 == 기대값
