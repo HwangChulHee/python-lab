@@ -17,9 +17,14 @@
 | MiniTask | 엔진이 구현 | 코루틴을 콜백(`step`)으로 **번역**하는 어댑터 — 큐에 들어가는 건 이것 |
 | MiniEventLoop | 엔진이 구현 | 콜 스택의 **상주 프레임**. 단일 while = SELECT → WAKE → RUN |
 
-시나리오는 metric-lab `mini_server`+`mini_framework`의 축약판: 손님 A가 먼저
-접속하지만 바이트는 B가 먼저 도착한다 — **나중에 온 B가 먼저 끝난다**. "A가
-느려도 B는 안 막힌다"가 화면에서 증명된다.
+관찰 대상은 **weblab(`mini_server` + `mini_framework`)의 축약판**이다 — 줄
+구조·변수명·ASGI 이벤트(`scope`/`receive`/`send`, `http.response.start` 등)를
+그대로 유지하고 print/lifespan/연결 정리만 덜어냈다. 손님 A(GET /hello)가 먼저
+접속하지만 바이트는 B(POST /echo)가 먼저 도착한다 — **나중에 온 B가 먼저
+끝난다**. "A가 느려도 B는 안 막힌다"가 화면에서 증명되고, 콜 스택에는
+`handle_connection → MiniAPI.__call__ → _respond → send`의 ASGI 왕복이 그대로
+얹힌다. 스텝마다 요약 한 줄 + 쉬운 개념 해설 + "지금 볼 곳"(어느 패널의 어떤
+데이터) 목록이 붙는다.
 
 ## 실행
 
@@ -30,8 +35,9 @@ python run.py -o out.html     # 출력 경로 지정
 ```
 
 검증(하나라도 실패하면 HTML을 만들지 않는다):
-① 미니 루프 응답 == 기대 바이트 ② 같은 `handle_connection`/`MiniAPI`를 **진짜
-asyncio**(`StreamReader.feed_data`) 위에서 돌려도 같은 응답 ③ 두 번 실행한
+① 미니 루프 응답(A: /hello, B: /echo) == 기대 바이트 ② 같은
+`handle_connection`/`MiniAPI`를 **진짜 asyncio**(`StreamReader.feed_data`) 위에서
+돌려도 같은 응답 — weblab verify.py의 uvicorn 대조와 같은 정신 ③ 두 번 실행한
 트레이스의 재개 순서 동일(결정성).
 
 ## 구조
@@ -44,7 +50,7 @@ engine/
   selector.py         ScriptedSelector — 각본 재생기 = 가짜 OS (수신 버퍼·backlog)
   channel.py          MiniListener/Reader/Writer — 튜플 신호를 yield하는 awaitable
   tracer.py           매 사건마다 전 계층 스냅샷 (코루틴 속성은 관찰, 재현 아님)
-demos/mini_web.py     관찰 대상 — handle_connection + MiniAPI (~80줄)
+demos/mini_web.py     관찰 대상 — weblab 축약판 (handle_connection + MiniAPI + hello/echo)
 viewer.py             트레이스 → 단일 자족 HTML (6패널, ←/→ 스테핑)
 ```
 

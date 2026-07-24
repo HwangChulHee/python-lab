@@ -50,10 +50,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .kbadge.loop { color:#1c4d94; background:#d7e5f8; }
   .story-meta .tp { font:11.5px ui-monospace,monospace; color:var(--mut); margin-top:4px; display:block; }
   .story-text { font-size:15px; line-height:1.75; }
-  .story-text code { font:600 13px ui-monospace,Consolas,monospace; border-radius:5px;
-                     padding:1px 6px; background:var(--bg); color:var(--sub); white-space:nowrap; }
-  .story-text code.kw { color:#1c4d94; background:var(--accbg); }
+  .story-text code, .concept code, .look code {
+    font:600 13px ui-monospace,Consolas,monospace; border-radius:5px;
+    padding:1px 6px; background:var(--bg); color:var(--sub); white-space:nowrap; }
+  .story-text code.kw, .concept code.kw, .look code.kw { color:#1c4d94; background:var(--accbg); }
   .keyhint { font-size:11.5px; color:var(--mut); white-space:nowrap; }
+  /* 쉬운 해설: 개념 문단 + 지금 볼 곳 목록 */
+  .concept { grid-column:1 / -1; margin-top:4px; padding-top:10px;
+             border-top:1px dashed var(--line); font-size:13.5px; line-height:1.8;
+             color:var(--sub); }
+  .look { grid-column:1 / -1; margin-top:8px; }
+  .look-h { font-size:11.5px; font-weight:700; color:var(--mut); margin-bottom:4px; }
+  .look .lk { font-size:13px; line-height:1.7; color:var(--sub); padding:1px 0 1px 4px; }
+  .pn { color:var(--acc); font-weight:700; }
 
   .grid { display:grid; grid-template-columns:1.2fr 0.9fr 1.1fr; gap:13px; align-items:start; }
   /* 소스는 왼쪽 열 전체(2행)를 차지한다. sticky는 쓰지 않는다 — 떠 있는 패널이
@@ -179,6 +188,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="story-meta"><span class="kbadge" id="kind"></span><span class="tp" id="tp"></span></div>
   <div class="story-text" id="desc"></div>
   <div class="keyhint">←/→ 키로<br>한 사건씩</div>
+  <div class="concept" id="concept"></div>
+  <div class="look" id="look"></div>
 </div>
 <div class="grid">
   <div class="panel srcpanel"><h2>① 소스 — demos/mini_web.py (📑 = 보관된 프레임의 책갈피)</h2>
@@ -231,7 +242,7 @@ function fmtNarr(text) {
     if (label) return `<code style="${labStyle(label)}">${m}</code>`;
     if (kw) return `<code class="kw">${m}</code>`;
     return `<code>${m}</code>`;                    // fd n / 줄 n
-  });
+  }).replace(/[①②③④⑤⑥]/g, '<b class="pn">$&</b>');
 }
 
 /* 준비큐·장부 콜백 표기에서 태스크 라벨을 뽑아 색을 입힌다 */
@@ -264,6 +275,11 @@ function render() {
   $("kind").textContent = KIND_LABEL[s.kind] || s.kind;
   $("tp").textContent = `T=${s.clock} · ${s.phase}`;
   $("desc").innerHTML = fmtNarr(s.narration);
+  $("concept").innerHTML = s.detail.concept ? fmtNarr(s.detail.concept) : "";
+  $("look").innerHTML = s.detail.look.length
+    ? `<div class="look-h">👀 지금 볼 곳</div>` +
+      s.detail.look.map(l => `<div class="lk">· ${fmtNarr(l)}</div>`).join("")
+    : "";
 
   // ① 소스 — 하이라이트 + 책갈피(태스크 색)
   const marks = {};                                // line → [labels]

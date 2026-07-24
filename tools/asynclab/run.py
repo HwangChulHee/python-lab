@@ -27,17 +27,29 @@ import viewer
 LISTEN_FD = 3
 
 # 각본: 나중에 접속한 B의 바이트가 먼저 도착한다 — "A가 느려도 B는 안 막힌다".
-REQ_LINE = b"GET /ping HTTP/1.1\r\n"
-REQ_REST = b"host: local\r\ncontent-length: 0\r\n\r\n"
+# 요청은 weblab verify.py의 데모 앱 그대로: A는 GET /hello, B는 POST /echo.
+REQ_A = (b"GET /hello HTTP/1.1\r\n", b"host: local\r\n\r\n")
+REQ_B = (b"POST /echo HTTP/1.1\r\n", b"content-length: 5\r\n\r\nhello")
 SCRIPT = [
     (1, "connect", LISTEN_FD, ("A", 4), "T=1 A 접속(fd 4)"),
     (2, "connect", LISTEN_FD, ("B", 5), "T=2 B 접속(fd 5)"),
-    (3, "data", 5, REQ_LINE, "T=3 B 요청라인 도착"),
-    (4, "data", 5, REQ_REST, "T=4 B 헤더+바디 도착"),
-    (5, "data", 4, REQ_LINE, "T=5 A 요청라인 도착"),
-    (6, "data", 4, REQ_REST, "T=6 A 헤더+바디 도착"),
+    (3, "data", 5, REQ_B[0], "T=3 B 요청라인 도착(POST /echo)"),
+    (4, "data", 5, REQ_B[1], "T=4 B 헤더+바디 도착(hello)"),
+    (5, "data", 4, REQ_A[0], "T=5 A 요청라인 도착(GET /hello)"),
+    (6, "data", 4, REQ_A[1], "T=6 A 헤더 도착(바디 없음)"),
 ]
-EXPECTED = b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\npong\n"
+
+
+def expected_response(body):
+    """mini_web의 send()/_respond()가 만드는 형식 그대로 기대값을 조립한다."""
+    return (b"HTTP/1.1 200 X\r\n"
+            b"content-type: text/plain; charset=utf-8\r\n"
+            b"content-length: " + str(len(body)).encode() + b"\r\n"
+            b"connection: close\r\n\r\n" + body)
+
+
+EXPECTED_A = expected_response("안녕, weblab\n".encode())
+EXPECTED_B = expected_response(b"hello")
 
 
 def build_trace():
@@ -47,10 +59,10 @@ def build_trace():
     loop = MiniEventLoop(selector, tracer)
     tracer.loop = loop
     tracer.func_cards = [
-        {"name": "serve", "note": "함수 객체 — 호출하면 코루틴 객체가 나온다"},
-        {"name": "handle_connection", "note": "함수 객체 — 손님마다 한 번씩 호출된다"},
-        {"name": "app (MiniAPI 인스턴스)", "note": "async __call__ 을 가진 콜러블"},
-        {"name": "ping", "note": "라우트 핸들러 함수 객체"},
+        {"name": "serve", "note": "uvicorn/start_server의 자리 — 접속마다 태스크 생성"},
+        {"name": "handle_connection", "note": "서버(mini_server)의 전부 — 연결 1개의 일생"},
+        {"name": "app (MiniAPI 인스턴스)", "note": "ASGI callable — async __call__(scope, receive, send)"},
+        {"name": "hello · echo", "note": "핸들러 — 프레임워크 사용자의 코드는 이만큼만"},
     ]
 
     app = mini_web.make_app()
@@ -61,7 +73,7 @@ def build_trace():
     return tracer.steps, order, {fd: bytes(b) for fd, b in selector.sent.items()}
 
 
-def verify_against_real_asyncio():
+def verify_against_real_asyncio(request_bytes):
     """검증 2 — 같은 코루틴 코드를 진짜 asyncio 위에서 돌려 응답을 대조한다."""
     class CollectWriter:                       # StreamWriter 대역: write/drain만
         def __init__(self):
@@ -75,7 +87,7 @@ def verify_against_real_asyncio():
 
     async def one_request():
         reader = asyncio.StreamReader()
-        reader.feed_data(REQ_LINE + REQ_REST)
+        reader.feed_data(request_bytes)
         reader.feed_eof()
         writer = CollectWriter()
         await mini_web.handle_connection(mini_web.make_app(), reader, writer)
@@ -92,13 +104,15 @@ def main():
     steps, order, sent = build_trace()
 
     # 검증 1 — 응답 정합
-    assert sent[4] == EXPECTED, f"A 응답 불일치: {sent[4]!r}"
-    assert sent[5] == EXPECTED, f"B 응답 불일치: {sent[5]!r}"
-    print(f"검증 1 OK — 미니 루프 응답 A/B == 기대값 ({EXPECTED!r})")
+    assert sent[4] == EXPECTED_A, f"A(/hello) 응답 불일치: {sent[4]!r}"
+    assert sent[5] == EXPECTED_B, f"B(/echo) 응답 불일치: {sent[5]!r}"
+    print("검증 1 OK — 미니 루프 응답 A(GET /hello)/B(POST /echo) == 기대값")
 
     # 검증 2 — 진짜 asyncio와 대조
-    real = verify_against_real_asyncio()
-    assert real == sent[4] == sent[5], f"진짜 asyncio 응답 불일치: {real!r}"
+    real_a = verify_against_real_asyncio(REQ_A[0] + REQ_A[1])
+    real_b = verify_against_real_asyncio(REQ_B[0] + REQ_B[1])
+    assert real_a == sent[4] and real_b == sent[5], \
+        f"진짜 asyncio 응답 불일치: {real_a!r} / {real_b!r}"
     print("검증 2 OK — 같은 코루틴 코드가 진짜 asyncio에서도 같은 응답을 낸다")
 
     # 검증 3 — 재개 순서 결정성
@@ -109,15 +123,16 @@ def main():
     src_lines = Path(mini_web.__file__).read_text(encoding="utf-8").splitlines()
     html = viewer.build_html({
         "title": "asynclab — 코루틴·이벤트 루프",
-        "subtitle": "코루틴은 진짜, 이벤트 루프와 네트워크만 재현 — 한 스텝 = 루프의 사건 하나",
+        "subtitle": "weblab(mini_server + mini_framework)의 코루틴은 진짜 — 이벤트 루프와 "
+                    "네트워크만 재현. 한 스텝 = 루프의 사건 하나",
         "src": src_lines,
         # 호출부 — 이 소스가 실행되기까지의 배선 (build_trace()의 실제 코드 요약)
         "boot": [
-            'selector = ScriptedSelector(SCRIPT, {3: "listen"})  # 각본 네트워크 = 가짜 OS',
-            "loop     = MiniEventLoop(selector, tracer)          # 미니 이벤트 루프",
-            "app      = make_app()                               # MiniAPI + GET /ping 라우트",
-            "listener = MiniListener(selector, fd=3)             # listen 소켓의 축약",
-            "loop.run_until_complete(serve(loop, app, listener)) # ← asyncio.run(...)에 해당",
+            'app      = make_app()          # MiniAPI + GET /hello, POST /echo (weblab verify.py의 앱)',
+            'selector = ScriptedSelector(SCRIPT, {3: "listen"})   # 각본 네트워크 = 가짜 OS',
+            "loop     = MiniEventLoop(selector, tracer)           # 미니 이벤트 루프",
+            "listener = MiniListener(selector, fd=3)              # asyncio.start_server의 자리",
+            "loop.run_until_complete(serve(loop, app, listener))  # ← asyncio.run(serve(...))에 해당",
         ],
         "script": [{"t": e[0], "desc": e[4]} for e in SCRIPT],
         "steps": steps,
