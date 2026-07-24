@@ -92,6 +92,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 font-weight:400; }
   .frame .tag.res { color:var(--warn); background:#f3e3bd; }
   .frame .tag.ln { color:var(--mut); background:rgba(255,255,255,.65); }
+  .frame .tag.push { color:#2f8f4e; background:#d9efe2; font-weight:700; }
+  .frame .tag.pop { color:#b3543a; background:#f9e5de; font-weight:700; }
+  .frame.coro.ghost { opacity:.55; border-style:dashed; }
   .cpu0 { border:1px dashed var(--sel); background:var(--selbg); color:var(--sel);
           border-radius:8px; padding:7px 11px; margin-bottom:7px; font-size:12.5px;
           text-align:center; }
@@ -267,21 +270,38 @@ function render() {
   }).join("");
   centerIn($("src"), $("src").querySelector(".on") || $("src").querySelector(".bm"));
 
-  // ② 콜 스택 — 배열은 바닥→꼭대기, 표시는 꼭대기부터
+  // ② 콜 스택 — 배열은 바닥→꼭대기, 표시는 꼭대기부터.
+  // 직전 스텝과 비교해: 방금 얹힌 프레임 ↑(초록 플래시), 방금 내려간 프레임은
+  // 유령(점선·반투명)으로 남겨 ↓ 방향을 보여준다.
+  const fkey = f => f.name + "|" + (f.label || "");
+  const curKeys = s.stack.filter(f => f.kind === "coro").map(fkey);
+  const prevKeys = prev ? prev.stack.filter(f => f.kind === "coro").map(fkey) : [];
+  const pushed = new Set(curKeys.filter(k => !prevKeys.includes(k)));
+  const popped = prev ? prev.stack.filter(f => f.kind === "coro" && !curKeys.includes(fkey(f))) : [];
+
+  const coroFrame = (f, extraTag, ghost) => {
+    const c = lab(f.label);
+    const ln = f.line ? `<span class="tag ln">줄 ${f.line}</span>` : "";
+    return `<div class="frame coro ${f.infra ? "infra" : ""} ${ghost ? "ghost" : ""}"` +
+           ` style="border-color:${c.bd};background:${c.bg};color:${c.fg}">` +
+           `${esc(f.name)}<span class="tag" style="${labStyle(f.label)}">${esc(f.label)}</span>${ln}${extraTag}</div>`;
+  };
+  const popTag = s.kind === "done"
+    ? `<span class="tag pop">↓ 프레임 소멸</span>`
+    : `<span class="tag pop">↓ 내려놓음 — 보관</span>`;
+  const ghosts = popped.slice().reverse().map(f => coroFrame(f, popTag, true));
   const frames = s.stack.slice().reverse().map(f => {
     if (f.kind === "loop")
       return `<div class="frame loopfr">${esc(f.name)}<span class="tag res">상주</span></div>`;
     if (f.kind === "coro") {
-      const c = lab(f.label);
-      const ln = f.line ? `<span class="tag ln">줄 ${f.line}</span>` : "";
-      return `<div class="frame coro ${f.infra ? "infra" : ""}" style="border-color:${c.bd};background:${c.bg};color:${c.fg}">` +
-             `${esc(f.name)}<span class="tag" style="${labStyle(f.label)}">${esc(f.label)}</span>${ln}</div>`;
+      const up = pushed.has(fkey(f)) ? `<span class="tag push">↑ 얹힘</span>` : "";
+      return coroFrame(f, up, false);
     }
     return `<div class="frame">${esc(f.name)}</div>`;
   });
   const cpu = s.phase === "SELECT"
     ? `<div class="cpu0">💤 OS 대기 중 — CPU 0% (파이썬 코드는 돌지 않는다)</div>` : "";
-  $("stack").innerHTML = `<div class="stk-note">↓ 스택 꼭대기</div>` + cpu + frames.join("");
+  $("stack").innerHTML = `<div class="stk-note">↓ 스택 꼭대기</div>` + cpu + ghosts.join("") + frames.join("");
 
   // ③ 루프 내부 — 페이즈 표시등 / 준비큐 / 장부 / 타이머 힙
   const phases = ["SELECT","WAKE","RUN"].map(p =>
@@ -357,6 +377,8 @@ $("guide").innerHTML = [
   `<div class="row">📑 책갈피 — 보관된 프레임이 멈춘 줄. 멈춘 줄이 곧 그 연결의 상태다</div>`,
   `<div class="row"><code>Task(x).step</code> — 준비큐에 들어가는 건 코루틴이 아니라 이 콜백(바운드 메서드)</div>`,
   `<div class="row">노란 테두리 플래시 — 직전 스텝과 달라진 코루틴 카드</div>`,
+  `<div class="row">콜 스택 <b style="color:#2f8f4e">↑ 얹힘</b> = 방금 재개된 프레임 · ` +
+  `<b style="color:#b3543a">↓ 내려놓음/소멸</b> = 방금 내려간 프레임(점선 유령으로 한 스텝 남는다)</div>`,
   `<div class="row">점선 프레임 — 엔진(channel.py) 내부라 소스 패널에 줄 표시가 없는 프레임</div>`,
 ].join("");
 
