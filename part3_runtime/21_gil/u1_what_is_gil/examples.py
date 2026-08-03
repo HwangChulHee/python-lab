@@ -35,7 +35,7 @@ print("  → LOAD, ADD, STORE 사이에서 스레드 전환 가능")
 print("\n=== race condition ===")
 
 counter = 0
-N = 200_000
+N = 1_000_000
 
 def worker_unsafe():
     global counter
