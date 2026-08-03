@@ -7,28 +7,28 @@ print("=== 유제1 ===")
 
 # (A)
 fa = [lambda: n for n in range(3)]
-print("  A:", [f() for f in fa], "  예측:__")
+print("  A:", [f() for f in fa], "  예측:__2,2,2")
 
 # (B)
 fb = [lambda n=n: n for n in range(3)]
-print("  B:", [f() for f in fb], "  예측:__")
+print("  B:", [f() for f in fb], "  예측:__0,1,2")
 
 # (C)
 def mk(n):
     return lambda: n
 fc = [mk(n) for n in range(3)]
-print("  C:", [f() for f in fc], "  예측:__")
+print("  C:", [f() for f in fc], "  예측:__0,1,2")
 
 # (D) — 즉시 호출
 fd = [(lambda: n)() for n in range(3)]
-print("  D:", fd, "  예측:__")
+print("  D:", fd, "  예측:__0,1,2")
 
 # (E) — 루프 변수를 안 쓰는 경우
 fe = [lambda: 99 for n in range(3)]
-print("  E:", [f() for f in fe], "  예측:__")
+print("  E:", [f() for f in fe], "  예측:__99,99,99")
 
 # 함정인 것과 아닌 것을 나누고, 기준을 한 문장으로:
-#   →
+#   → 함정은 A. E는 뭐 n도 안쓰니 함정이라고도 볼수 없을듯. 클로저 값을 사용하는 경우 값이 변경된후 클로저값을 사용하려하면 실수 발생하는거지
 
 
 # ═══════════════════════════════════════════════════
@@ -46,9 +46,9 @@ print("  early __closure__ :", early[0].__closure__)
 print("  early __defaults__:", early[0].__defaults__)
 
 # (a) early 쪽이 __closure__가 None인 이유:
-#   →
+#   → 출력하는 n은 클로저가 아닌 default 영역, 즉 기본인자에서 가져오기때문이다
 # (b) 이 차이가 "이른 바인딩 vs 늦은 바인딩"과 어떻게 대응하나:
-#   →
+#   → 늦은 바인딩인 late는 클로저 변수인 n 값이 최종적으로 2로 되는 문제가 생기는데, early는 각각 default값을 사용하기때문에 문제가 안되는거지
 
 
 # ═══════════════════════════════════════════════════
@@ -71,14 +71,46 @@ for k, fn in make_retriers_buggy().items():
     print(f"  {k:<6} → {fn()}")
 
 # (a) 캡처된 변수가 몇 개이고 cell이 몇 개인가:
-#   →
+#   → retry 함수가 name, url을 두개를 캡처. cell이 뭔지는 모르겠네.
 # (b) 팩토리 함수 방식으로 고쳐라 (코드 작성):
 #   →
+def make_retriers_buggy2():
+    retriers = {}
+    
+    def make_function(name, url) :
+        def retry(times=3) :
+            return f"{name}: {url}를 {times}회 재시도"
+        return retry
+    
+    for name, url in [("users", "/api/users"),
+                      ("posts", "/api/posts"),
+                      ("tags",  "/api/tags")]:
+        retriers[name] = make_function(name, url)
+    return retriers
+
+print("\n=== 유제3 -팩토리 ===")
+for k, fn in make_retriers_buggy2().items():
+    print(f"  {k:<6} → {fn()}")
+    
+    
 # (c) 기본값 인자 방식으로도 고쳐라. 이 경우 times=3과 충돌하지 않게
 #     매개변수 순서를 어떻게 해야 하나:
 #   →
+def make_retriers_buggy3():
+    retriers = {}
+    for name, url in [("users", "/api/users"),
+                      ("posts", "/api/posts"),
+                      ("tags",  "/api/tags")]:
+        def retry(name=name, url=url, times=3):
+            return f"{name}: {url}를 {times}회 재시도"
+        retriers[name] = retry
+    return retriers
 
-
+print("\n=== 유제3 -기본 인자 ===")
+for k, fn in make_retriers_buggy3().items():
+    print(f"  {k:<6} → {fn()}")
+    
+    
 # ═══════════════════════════════════════════════════
 # 유제 4. 판단 문제 — 이건 안전한가
 # ═══════════════════════════════════════════════════
@@ -113,12 +145,12 @@ print("  2:", [t() for t in tasks2])
 print("  3:", [t() for t in tasks3])
 print("  4:", [t() for t in tasks4])
 
-# 함정이 있는 것: __
+# 함정이 있는 것: __2
 # 각각의 이유:
 #   1 →
-#   2 →
+#   2 → for문의 x값을 x*2가 추적하니 맨 마지막 값인 3이 저장되어 task2의 함수를 각각 호출하면 모두 6이 나오는거지
 #   3 →
 #   4 →
 #
 # (심화) 1번이 안전한 근본 이유는 무엇인가? (함수를 만들지 않는다는 점에서)
-#   →
+#   → 값 자체를 넣어버리니까.
